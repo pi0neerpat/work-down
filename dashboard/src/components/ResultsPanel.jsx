@@ -2,35 +2,9 @@ import { useState, useEffect } from 'react'
 import { CheckCircle, XCircle, AlertCircle, Loader, Clock, Ban, Square, Activity, ListChecks } from 'lucide-react'
 import Markdown from 'react-markdown'
 import { cn, timeAgo } from '../lib/utils'
-import { statusConfig } from './SwarmDetail'
-
-const validationConfig = {
-  needs_validation: { icon: AlertCircle, color: 'text-status-review', bg: 'bg-status-review-bg', border: 'border-status-review-border', label: 'Needs Review' },
-  validated: { icon: CheckCircle, color: 'text-status-validated', bg: 'bg-status-validated-bg', border: 'border-status-active-border', label: 'Validated' },
-  rejected: { icon: XCircle, color: 'text-status-failed', bg: 'bg-status-failed-bg', border: 'border-status-failed-border', label: 'Rejected' },
-}
-
-const mdComponents = {
-  p: ({ children }) => <p className="leading-relaxed mb-1.5 last:mb-0">{children}</p>,
-  strong: ({ children }) => <strong className="text-foreground font-semibold">{children}</strong>,
-  em: ({ children }) => <em className="italic">{children}</em>,
-  ol: ({ children }) => <ol className="list-decimal pl-4 space-y-0.5 mb-1.5 last:mb-0">{children}</ol>,
-  ul: ({ children }) => <ul className="list-disc pl-4 space-y-0.5 mb-1.5 last:mb-0">{children}</ul>,
-  li: ({ children }) => <li className="leading-relaxed pl-0.5">{children}</li>,
-  h2: ({ children }) => <h2 className="text-sm font-bold text-foreground mt-3 mb-1 first:mt-0">{children}</h2>,
-  h3: ({ children }) => <h3 className="text-[13px] font-semibold text-foreground mt-2.5 mb-0.5 first:mt-0">{children}</h3>,
-  h4: ({ children }) => <h4 className="text-xs font-semibold text-foreground mt-2 mb-0.5 first:mt-0">{children}</h4>,
-  code: ({ children }) => <code className="px-1 py-0.5 rounded bg-secondary/60 text-[11px] font-mono" style={{ fontFamily: 'var(--font-mono)' }}>{children}</code>,
-  a: ({ href, children }) => <a href={href} className="text-primary underline underline-offset-2" target="_blank" rel="noopener noreferrer">{children}</a>,
-  hr: () => <hr className="my-2 border-border" />,
-}
-
-const repoIdentityColors = {
-  marketing: '#e0b44a',
-  website: '#7b8af5',
-  electron: '#34c9a0',
-  hub: '#6ba8e8',
-}
+import { statusConfig, validationConfig } from '../lib/statusConfig'
+import { repoIdentityColors } from '../lib/constants'
+import { mdComponents } from './mdComponents'
 
 export default function ResultsPanel({ agentId, onSwarmRefresh, onOverviewRefresh }) {
   const [detail, setDetail] = useState(null)
@@ -178,7 +152,7 @@ export default function ResultsPanel({ agentId, onSwarmRefresh, onOverviewRefres
     return (
       <div className="flex items-center justify-center h-full">
         <div className="text-center">
-          <Activity size={24} className="mx-auto mb-2 text-muted-foreground/20" />
+          <Activity size={24} className="mx-auto mb-2 text-muted-foreground/40" />
           <p className="text-sm text-muted-foreground/50">Select a swarm agent to view results</p>
         </div>
       </div>
@@ -299,7 +273,7 @@ export default function ResultsPanel({ agentId, onSwarmRefresh, onOverviewRefres
       {detail.results && (
         <div className="mb-5">
           <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-2">Results</p>
-          <div className="rounded-lg border border-card-border bg-card px-4 py-3 text-xs text-foreground/80 leading-relaxed">
+          <div className="rounded-lg border border-card-border bg-card px-4 py-3 text-xs text-foreground/90 leading-relaxed">
             <Markdown components={mdComponents}>{detail.results}</Markdown>
           </div>
         </div>

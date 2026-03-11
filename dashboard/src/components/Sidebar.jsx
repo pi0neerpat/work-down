@@ -1,14 +1,8 @@
 import { useState } from 'react'
 import { GitBranch, Loader, ChevronDown, ChevronRight, Plus } from 'lucide-react'
 import { cn } from '../lib/utils'
-import { statusConfig } from './SwarmDetail'
-
-const repoIdentityColors = {
-  marketing: '#e0b44a',
-  website: '#818cf8',
-  electron: '#34d399',
-  hub: '#7dd3fc',
-}
+import { statusConfig } from '../lib/statusConfig'
+import { repoIdentityColors } from '../lib/constants'
 
 const groupOrder = [
   { key: 'needs_validation', label: 'REVIEW', colorVar: '--status-review' },
@@ -104,13 +98,13 @@ export default function Sidebar({ overview, swarm, selection, onSelect, onOvervi
   }
 
   return (
-    <aside className="w-[256px] shrink-0 border-r border-border bg-background overflow-y-auto">
+    <aside className="w-[240px] shrink-0 border-r border-border bg-background overflow-y-auto">
       {/* Repos section */}
-      <div className="px-4 pt-5 pb-4">
-        <h3 className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground/60 mb-3 px-1">
+      <div className="px-3 pt-4 pb-4">
+        <h3 className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground mb-3 px-1">
           Repos
         </h3>
-        <div className="space-y-0.5">
+        <div className="space-y-2">
           {repos.map(repo => {
             const color = repoIdentityColors[repo.name] || 'var(--primary)'
             const isSelected = selection?.type === 'repo' && selection.id === repo.name
@@ -128,7 +122,7 @@ export default function Sidebar({ overview, swarm, selection, onSelect, onOvervi
                 <button
                   onClick={() => onSelect({ type: 'repo', id: repo.name })}
                   className={cn(
-                    'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-all group',
+                    'w-full flex items-center gap-2.5 px-2.5 py-2 rounded-md text-left transition-all duration-150 group',
                     isSelected
                       ? 'bg-card'
                       : 'hover:bg-card/50'
@@ -253,7 +247,7 @@ export default function Sidebar({ overview, swarm, selection, onSelect, onOvervi
                                     key={agent.id}
                                     onClick={() => onSelect({ type: 'swarm', id: agent.id })}
                                     className={cn(
-                                      'w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-left transition-all',
+                                      'w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left transition-all duration-150',
                                       isSelected
                                         ? 'bg-card'
                                         : 'hover:bg-card/50'

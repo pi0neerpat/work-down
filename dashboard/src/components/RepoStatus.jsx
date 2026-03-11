@@ -1,13 +1,7 @@
 import { useState } from 'react'
 import { GitBranch, FileText, Save, RotateCcw, X, AlertTriangle, Loader2 } from 'lucide-react'
 import { cn } from '../lib/utils'
-
-const repoIdentityColors = {
-  marketing: '#e0b44a',
-  website: '#818cf8',
-  electron: '#34d399',
-  hub: '#7dd3fc',
-}
+import { repoIdentityColors } from '../lib/constants'
 
 function ProgressRing({ open, done, size = 32 }) {
   const total = open + done
@@ -84,7 +78,7 @@ function RepoCard({ repo, index, onRefresh }) {
 
   return (
     <div
-      className="animate-fade-up rounded-lg border border-card-border bg-card hover:bg-card-hover transition-all group"
+      className="animate-fade-up rounded-lg border border-card-border bg-card hover:bg-card-hover transition-all duration-200 group"
       style={{ animationDelay: `${index * 80}ms` }}
     >
       <div className="px-3 py-2.5">

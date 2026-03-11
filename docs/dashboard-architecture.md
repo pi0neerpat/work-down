@@ -24,14 +24,17 @@ dashboard/
     │   ├── TerminalPanel.jsx  # Terminal instances (one per worker)
     │   ├── ResultsPanel.jsx   # Review tab: agent results + validate/reject
     │   ├── RightPanel.jsx     # Right sidebar: progress timeline or activity feed
-    │   ├── SwarmDetail.jsx    # Full-page agent detail (legacy, provides statusConfig)
+    │   ├── mdComponents.jsx   # Shared react-markdown component overrides
+    │   ├── SwarmDetail.jsx    # Full-page agent detail (legacy)
     │   ├── SwarmPanel.jsx     # Grid of agent cards (standalone view)
     │   ├── ActivityTimeline.jsx # Standalone activity timeline
     │   └── RepoStatus.jsx     # Repo cards with progress rings + checkpoints
     ├── lib/
-    │   ├── usePolling.js      # Hook: poll API endpoint at interval
-    │   ├── useTerminal.js     # Hook: xterm.js + WebSocket PTY connection
-    │   └── utils.js           # cn() class merger + timeAgo() formatter
+    │   ├── constants.js      # repoIdentityColors (single source of truth)
+    │   ├── statusConfig.js   # statusConfig, validationConfig for swarm states
+    │   ├── usePolling.js     # Hook: poll API endpoint at interval
+    │   ├── useTerminal.js    # Hook: xterm.js + WebSocket PTY connection
+    │   └── utils.js          # cn() class merger + timeAgo() formatter
     └── styles/
         ├── tailwind.css       # Tailwind v4 import + source config
         └── theme.css          # CSS custom properties (colors, fonts, animations)
@@ -155,24 +158,23 @@ App (root state: selection, agentTerminals, skipPermissions)
 
 ### Shared Patterns Across Components
 
-**Repo identity colors** — Used in 6+ components for color-coding repos:
+**Repo identity colors** — Single source of truth in `lib/constants.js`:
 ```js
-const repoIdentityColors = {
-  marketing: '#e0b44a',
-  website: '#818cf8',  // or '#7b8af5' in some files
-  electron: '#34d399', // or '#34c9a0'
-  hub: '#7dd3fc',      // or '#6ba8e8'
-}
+import { repoIdentityColors } from '../lib/constants'
 ```
-This is duplicated across `Sidebar.jsx`, `TaskBoard.jsx`, `RightPanel.jsx`, `ResultsPanel.jsx`, `RepoStatus.jsx`, and `SwarmPanel.jsx`. If you need to change a color, update **all** instances. Consider extracting to a shared constant if this becomes error-prone.
+Used by Sidebar, TaskBoard, RightPanel, ResultsPanel, RepoStatus, ActivityTimeline. Update colors in one place.
 
-**Status config** — Exported from `SwarmDetail.jsx` as `statusConfig`, imported by `RightPanel.jsx` and `ResultsPanel.jsx`:
+**Status config** — In `lib/statusConfig.js`:
 ```js
-import { statusConfig } from './SwarmDetail'
+import { statusConfig, validationConfig } from '../lib/statusConfig'
 ```
-Maps status strings (`in_progress`, `completed`, `failed`, `killed`) to `{ icon, color, bg, label, dotColor }`.
+Maps status strings (`in_progress`, `completed`, `failed`, `killed`, `needs_validation`) to `{ icon, color, bg, label, dotColor }`. Imported by RightPanel, ResultsPanel, SwarmDetail, SwarmPanel, Sidebar.
 
-**Markdown rendering** — `ResultsPanel` and `SwarmDetail` both define `mdComponents` for custom react-markdown styling. These are similar but not shared.
+**Markdown rendering** — Shared `mdComponents` in `components/mdComponents.jsx`:
+```js
+import { mdComponents } from './mdComponents'
+```
+Used by ResultsPanel, SwarmDetail, SwarmPanel for consistent react-markdown styling.
 
 **Confirmation pattern** — Kill and revert actions use a 2-click confirm with 3-second timeout:
 ```js

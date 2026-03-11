@@ -1,4 +1,4 @@
-# Swarm Task: Add session usage meter to header
+bug# Swarm Task: Add session usage meter to header
 Started: 2026-03-11
 Status: Complete
 Validation: Rejected

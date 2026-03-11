@@ -206,7 +206,7 @@ export default function TerminalPanel({ sessions, activeSessionId, skipPermissio
       {!hasTerminal && (
         <div className="flex items-center justify-center h-full">
           <div className="text-center">
-            <TerminalSquare size={24} className="mx-auto mb-2 text-muted-foreground/20" />
+            <TerminalSquare size={24} className="mx-auto mb-2 text-muted-foreground/40" />
             <p className="text-sm text-muted-foreground/50">No terminal for this worker.</p>
             <p className="text-xs text-muted-foreground/40 mt-1">Use Start on a task to create one.</p>
           </div>

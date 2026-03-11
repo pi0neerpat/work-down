@@ -13,7 +13,7 @@ export default function CenterTabs({ tabs, activeTab, onTabChange, contentMap })
               key={tab.id}
               onClick={() => onTabChange(tab.id)}
               className={cn(
-                'flex items-center gap-1.5 px-4 py-2.5 text-[13px] font-medium transition-all relative',
+                'flex items-center gap-1.5 px-4 py-2 text-[13px] font-medium transition-all relative',
                 isActive
                   ? 'text-foreground'
                   : 'text-muted-foreground hover:text-foreground-secondary'
@@ -22,7 +22,7 @@ export default function CenterTabs({ tabs, activeTab, onTabChange, contentMap })
               <Icon size={14} />
               {tab.label}
               {isActive && (
-                <div className="absolute bottom-0 left-2 right-2 h-[2px] rounded-full" style={{ background: 'var(--primary)' }} />
+                <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-primary" />
               )}
             </button>
           )

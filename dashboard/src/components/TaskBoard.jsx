@@ -1,13 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { Circle, CheckCircle2, ListTodo, Plus, Loader, ArrowRightLeft, Save, RotateCcw, X, AlertTriangle, Loader2, Play, ChevronDown, ChevronRight, Pencil, Check, Eye } from 'lucide-react'
 import { cn } from '../lib/utils'
-
-const repoIdentityColors = {
-  marketing: '#e0b44a',
-  website: '#818cf8',
-  electron: '#34d399',
-  hub: '#7dd3fc',
-}
+import { repoIdentityColors } from '../lib/constants'
 
 function ProgressBar({ open, done }) {
   const total = open + done
@@ -15,7 +9,7 @@ function ProgressBar({ open, done }) {
   const pct = (done / total) * 100
 
   return (
-    <div className="h-1 rounded-full bg-border overflow-hidden">
+    <div className="h-1.5 rounded-full bg-border overflow-hidden">
       <div
         className="h-full rounded-full transition-all duration-700 ease-out"
         style={{
@@ -374,12 +368,13 @@ export default function TaskBoard({ overview, onOverviewRefresh, selectedRepo, o
                           <li
                             key={`open-${j}`}
                             className={cn(
-                              "flex items-start gap-2 px-3 py-2.5 rounded-lg text-[14px] leading-relaxed transition-colors",
-                              "border border-border/50 bg-background/30",
+                              "flex items-start gap-2 px-3 py-2 rounded-md text-[14px] leading-relaxed transition-all duration-150 border-l-2",
+                              "border border-border bg-background-raised/50",
                               isBeingWorked
-                                ? "text-foreground/85 bg-status-active-bg/30 border-status-active/20"
-                                : "text-foreground/85 hover:bg-card-hover/40 hover:border-border/70 group"
+                                ? "text-foreground/85 bg-status-active-bg/30 border-status-active/20 border-l-status-active"
+                                : "text-foreground/85 hover:bg-card-hover/40 hover:border-border/70 border-l-transparent hover:border-l-[var(--repo-accent)] group"
                             )}
+                            style={!isBeingWorked ? { '--repo-accent': identityColor } : undefined}
                           >
                             {isBeingWorked ? (
                               <span className="mt-0.5 shrink-0 text-status-active">
@@ -549,8 +544,8 @@ export default function TaskBoard({ overview, onOverviewRefresh, selectedRepo, o
             </div>
           ) : (
             <div className="py-8 text-center">
-              <ListTodo size={24} className="mx-auto mb-2 text-muted-foreground/20" />
-              <p className="text-sm text-muted-foreground/40">No open tasks</p>
+              <ListTodo size={24} className="mx-auto mb-2 text-muted-foreground/40" />
+              <p className="text-sm text-muted-foreground/50">No open tasks</p>
             </div>
           )}
         </div>

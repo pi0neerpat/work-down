@@ -2,61 +2,9 @@ import { useState, useEffect } from 'react'
 import { Activity, CheckCircle, XCircle, AlertCircle, Loader, Clock, Ban, Square } from 'lucide-react'
 import Markdown from 'react-markdown'
 import { cn, timeAgo } from '../lib/utils'
-
-export const statusConfig = {
-  in_progress: {
-    icon: Loader, color: 'text-status-active', borderColor: 'var(--status-active-border)',
-    bg: 'bg-status-active-bg', label: 'Running', dotColor: 'var(--status-active)',
-  },
-  completed: {
-    icon: CheckCircle, color: 'text-status-complete', borderColor: 'var(--status-complete-border)',
-    bg: 'bg-status-complete-bg', label: 'Complete', dotColor: 'var(--status-complete)',
-  },
-  failed: {
-    icon: XCircle, color: 'text-status-failed', borderColor: 'var(--status-failed-border)',
-    bg: 'bg-status-failed-bg', label: 'Failed', dotColor: 'var(--status-failed)',
-  },
-  killed: {
-    icon: Ban, color: 'text-status-failed', borderColor: 'var(--status-failed-border)',
-    bg: 'bg-status-failed-bg', label: 'Killed', dotColor: 'var(--status-failed)',
-  },
-  needs_validation: {
-    icon: AlertCircle, color: 'text-status-review', borderColor: 'var(--status-review-border)',
-    bg: 'bg-status-review-bg', label: 'Review', dotColor: 'var(--status-review)',
-  },
-  unknown: {
-    icon: Activity, color: 'text-muted-foreground', borderColor: 'var(--border)',
-    bg: 'bg-muted', label: '?', dotColor: 'var(--muted-foreground)',
-  },
-}
-
-const validationConfig = {
-  needs_validation: { icon: AlertCircle, color: 'text-status-review', bg: 'bg-status-review-bg', border: 'border-status-review-border', label: 'Needs Review' },
-  validated: { icon: CheckCircle, color: 'text-status-validated', bg: 'bg-status-validated-bg', border: 'border-status-active-border', label: 'Validated' },
-  rejected: { icon: XCircle, color: 'text-status-failed', bg: 'bg-status-failed-bg', border: 'border-status-failed-border', label: 'Rejected' },
-}
-
-const mdComponents = {
-  p: ({ children }) => <p className="leading-relaxed mb-1.5 last:mb-0">{children}</p>,
-  strong: ({ children }) => <strong className="text-foreground font-semibold">{children}</strong>,
-  em: ({ children }) => <em className="italic">{children}</em>,
-  ol: ({ children }) => <ol className="list-decimal pl-4 space-y-0.5 mb-1.5 last:mb-0">{children}</ol>,
-  ul: ({ children }) => <ul className="list-disc pl-4 space-y-0.5 mb-1.5 last:mb-0">{children}</ul>,
-  li: ({ children }) => <li className="leading-relaxed pl-0.5">{children}</li>,
-  h2: ({ children }) => <h2 className="text-sm font-bold text-foreground mt-3 mb-1 first:mt-0">{children}</h2>,
-  h3: ({ children }) => <h3 className="text-[13px] font-semibold text-foreground mt-2.5 mb-0.5 first:mt-0">{children}</h3>,
-  h4: ({ children }) => <h4 className="text-xs font-semibold text-foreground mt-2 mb-0.5 first:mt-0">{children}</h4>,
-  code: ({ children }) => <code className="px-1 py-0.5 rounded bg-secondary/60 text-[11px] font-mono" style={{ fontFamily: 'var(--font-mono)' }}>{children}</code>,
-  a: ({ href, children }) => <a href={href} className="text-primary underline underline-offset-2" target="_blank" rel="noopener noreferrer">{children}</a>,
-  hr: () => <hr className="my-2 border-border" />,
-}
-
-const repoIdentityColors = {
-  marketing: '#e0b44a',
-  website: '#818cf8',
-  electron: '#34d399',
-  hub: '#7dd3fc',
-}
+import { statusConfig, validationConfig } from '../lib/statusConfig'
+import { repoIdentityColors } from '../lib/constants'
+import { mdComponents } from './mdComponents'
 
 export default function SwarmDetail({ agentId, onSwarmRefresh, onOverviewRefresh }) {
   const [detail, setDetail] = useState(null)

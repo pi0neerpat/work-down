@@ -1,14 +1,8 @@
 import { useState, useEffect } from 'react'
 import { Clock, Cpu, Loader, PanelRightClose, PanelRightOpen } from 'lucide-react'
 import { cn, timeAgo } from '../lib/utils'
-import { statusConfig } from './SwarmDetail'
-
-const repoColors = {
-  marketing: '#e0b44a',
-  website: '#818cf8',
-  electron: '#34d399',
-  hub: '#7dd3fc',
-}
+import { statusConfig } from '../lib/statusConfig'
+import { repoIdentityColors } from '../lib/constants'
 
 function formatRelativeDate(dateStr) {
   if (!dateStr) return ''
@@ -86,8 +80,8 @@ function ProgressTimeline({ agentId }) {
   if (!detail || !detail.progressEntries?.length) {
     return (
       <div className="py-6 text-center">
-        <Clock size={16} className="mx-auto mb-1 text-muted-foreground/15" />
-        <p className="text-[11px] text-muted-foreground/30">No progress yet</p>
+        <Clock size={16} className="mx-auto mb-1 text-muted-foreground/40" />
+        <p className="text-[11px] text-muted-foreground/50">No progress yet</p>
       </div>
     )
   }
@@ -180,8 +174,8 @@ function ActivityFeed({ overview }) {
   if (entries.length === 0) {
     return (
       <div className="py-6 text-center">
-        <Clock size={16} className="mx-auto mb-1 text-muted-foreground/15" />
-        <p className="text-[11px] text-muted-foreground/30">No activity</p>
+        <Clock size={16} className="mx-auto mb-1 text-muted-foreground/40" />
+        <p className="text-[11px] text-muted-foreground/50">No activity</p>
       </div>
     )
   }
@@ -224,7 +218,7 @@ function ActivityFeed({ overview }) {
           </div>
           <div className={cn('space-y-0', gi < grouped.length - 1 ? 'mb-2' : 'mb-0')}>
             {group.items.map((item, ii) => {
-              const dotColor = repoColors[item.repo] || 'var(--muted-foreground)'
+              const dotColor = repoIdentityColors[item.repo] || 'var(--muted-foreground)'
               return (
                 <div key={`${item.repo}-${ii}`} className="relative flex items-start gap-1.5 py-px">
                   <div
@@ -278,9 +272,9 @@ export default function RightPanel({ selection, overview, swarm, collapsed, onTo
   }
 
   return (
-    <aside className="w-[272px] shrink-0 border-l border-border bg-background overflow-y-auto">
+    <aside className="w-[260px] shrink-0 border-l border-border bg-background overflow-y-auto">
       {/* Collapse toggle */}
-      <div className="px-3 pt-2 flex justify-end">
+      <div className="px-4 pt-2 flex justify-end">
         <button
           onClick={onToggleCollapse}
           className="p-1 rounded-lg text-muted-foreground/30 hover:text-muted-foreground hover:bg-card transition-colors"
@@ -292,7 +286,7 @@ export default function RightPanel({ selection, overview, swarm, collapsed, onTo
 
       {/* Skills section — above progress for swarm agents */}
       {selectedAgent?.skills?.length > 0 && (
-        <div className="px-3 pt-1 pb-3">
+        <div className="px-4 pt-1 pb-3">
           <div className="flex items-center gap-2 mb-2 px-1">
             <Cpu size={11} className="text-muted-foreground/40" />
             <h3 className="text-[11px] font-medium text-muted-foreground/50">
@@ -314,11 +308,11 @@ export default function RightPanel({ selection, overview, swarm, collapsed, onTo
 
       {/* Divider between skills and progress/activity */}
       {selectedAgent?.skills?.length > 0 && isSwarmSelected && (
-        <div className="mx-3 h-px bg-border" />
+        <div className="mx-4 h-px bg-border" />
       )}
 
       {/* Progress Timeline / Activity section */}
-      <div className="px-3 pb-3 pt-2">
+      <div className="px-4 pb-3 pt-2">
         <div className="flex items-center gap-2 mb-2 px-1">
           <Clock size={10} className="text-muted-foreground/30" />
           <h3 className="text-[10px] font-medium text-muted-foreground/40 uppercase tracking-wider">

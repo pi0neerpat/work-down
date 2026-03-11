@@ -77,11 +77,11 @@ export default function HeaderBar({ overview, swarm, lastRefresh, error, skipPer
     ?.toUpperCase() || 'HUB'
 
   return (
-    <header className="sticky top-0 z-50 bg-background/80 backdrop-blur-md border-b border-border">
-      <div className="px-5 py-3 flex items-center justify-between">
+    <header className="sticky top-0 z-50 bg-background border-b border-border">
+      <div className="px-4 py-2 flex items-center justify-between">
         {/* Left: brand */}
         <div className="flex items-center gap-2.5">
-          <h1 className="text-sm font-semibold tracking-wide text-foreground/90 leading-none">
+          <h1 className="text-sm font-medium text-foreground leading-none" style={{ fontFamily: 'var(--font-display)' }}>
             {title}
           </h1>
         </div>
@@ -89,14 +89,14 @@ export default function HeaderBar({ overview, swarm, lastRefresh, error, skipPer
         {/* Right: badges + connection */}
         <div className="flex items-center gap-2.5">
           {activeAgents > 0 && (
-            <span className="flex items-center gap-1.5 text-[10px] font-medium px-2 py-0.5 rounded-md bg-status-active-bg text-status-active/80">
+            <span className="flex items-center gap-1.5 text-[10px] font-medium px-2 py-0.5 rounded bg-status-active-bg text-status-active">
               <Activity size={10} strokeWidth={2.5} />
               <span className="font-mono" style={{ fontFamily: 'var(--font-mono)' }}>{activeAgents}</span>
               <span className="opacity-60 hidden sm:inline">active</span>
             </span>
           )}
           {needsReview > 0 && (
-            <span className="flex items-center gap-1.5 text-[10px] font-medium px-2 py-0.5 rounded-md bg-status-review-bg text-status-review/80">
+            <span className="flex items-center gap-1.5 text-[10px] font-medium px-2 py-0.5 rounded bg-status-review-bg text-status-review">
               <AlertCircle size={10} strokeWidth={2.5} />
               <span className="font-mono" style={{ fontFamily: 'var(--font-mono)' }}>{needsReview}</span>
               <span className="opacity-60 hidden sm:inline">review</span>
@@ -105,7 +105,7 @@ export default function HeaderBar({ overview, swarm, lastRefresh, error, skipPer
           <button
             onClick={onToggleSkipPermissions}
             className={cn(
-              'flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-md transition-all',
+              'flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded transition-all',
               skipPermissions
                 ? 'bg-status-review-bg text-status-review/70'
                 : 'bg-status-active-bg text-status-active/70'

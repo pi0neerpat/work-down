@@ -1,58 +1,67 @@
 :root {
-  /* Base palette — warm, low-contrast */
-  --background: #19191d;
-  --background-raised: #1e1e22;
-  --foreground: #bababf;
-  --foreground-secondary: #8a8a93;
+  /* Base palette — flat IDE, high-contrast */
+  --background: #161618;
+  --background-raised: #1c1c1e;
+  --foreground: #e4e4e7;
+  --foreground-secondary: #a1a1aa;
 
-  /* Card system — gentle layering */
-  --card: #1e1e22;
-  --card-foreground: #bababf;
-  --card-hover: #242429;
-  --card-border: rgba(140, 140, 150, 0.05);
-  --card-border-hover: rgba(140, 140, 150, 0.10);
+  /* Card system — flat, minimal borders */
+  --card: #1c1c1e;
+  --card-foreground: #e4e4e7;
+  --card-hover: #222225;
+  --card-border: rgba(255, 255, 255, 0.06);
+  --card-border-hover: rgba(255, 255, 255, 0.08);
 
-  /* Accents */
-  --primary: #8b95f7;
-  --primary-glow: rgba(139, 149, 247, 0.08);
-  --primary-foreground: #19191d;
+  /* Accents — green for ready/active (IDE convention) */
+  --primary: #22c55e;
+  --primary-glow: rgba(34, 197, 94, 0.08);
+  --primary-foreground: #161618;
 
   /* Surface */
-  --secondary: #222227;
-  --secondary-foreground: #8a8a93;
-  --muted: #222227;
-  --muted-foreground: #5c5c65;
-  --accent: #2a2a2f;
-  --accent-foreground: #bababf;
-  --border: rgba(140, 140, 150, 0.05);
-  --ring: #8b95f7;
-  --radius: 0.75rem;
+  --secondary: #222225;
+  --secondary-foreground: #a1a1aa;
+  --muted: #27272a;
+  --muted-foreground: #71717a;
+  --accent: #27272a;
+  --accent-foreground: #e4e4e7;
+  --border: rgba(255, 255, 255, 0.06);
+  --ring: #22c55e;
+  --radius: 0.5rem;
 
-  /* Status — muted, not glaring */
-  --status-active: #5ebd9e;
-  --status-active-glow: rgba(94, 189, 158, 0.06);
-  --status-active-bg: rgba(94, 189, 158, 0.05);
-  --status-active-border: rgba(94, 189, 158, 0.14);
-  --status-complete: #7aadcc;
-  --status-complete-bg: rgba(122, 173, 204, 0.05);
-  --status-complete-border: rgba(122, 173, 204, 0.12);
-  --status-failed: #d47272;
-  --status-failed-bg: rgba(212, 114, 114, 0.05);
-  --status-failed-border: rgba(212, 114, 114, 0.12);
-  --status-review: #c9a644;
-  --status-review-bg: rgba(201, 166, 68, 0.05);
-  --status-review-border: rgba(201, 166, 68, 0.14);
-  --status-validated: #5ebd9e;
-  --status-validated-bg: rgba(94, 189, 158, 0.05);
-  --status-dirty: #c9a644;
-  --status-clean: #5ebd9e;
+  /* Status — green for ready, red for errors (IDE convention) */
+  --status-active: #22c55e;
+  --status-active-glow: rgba(34, 197, 94, 0.12);
+  --status-active-bg: rgba(34, 197, 94, 0.1);
+  --status-active-border: rgba(34, 197, 94, 0.2);
+  --status-complete: #22c55e;
+  --status-complete-bg: rgba(34, 197, 94, 0.08);
+  --status-complete-border: rgba(34, 197, 94, 0.15);
+  --status-failed: #ef4444;
+  --status-failed-bg: rgba(239, 68, 68, 0.1);
+  --status-failed-border: rgba(239, 68, 68, 0.2);
+  --status-review: #eab308;
+  --status-review-bg: rgba(234, 179, 8, 0.1);
+  --status-review-border: rgba(234, 179, 8, 0.2);
+  --status-validated: #22c55e;
+  --status-validated-bg: rgba(34, 197, 94, 0.1);
+  --status-dirty: #eab308;
+  --status-clean: #22c55e;
 
-  /* Fonts */
-  --font-body: 'Instrument Sans', system-ui, -apple-system, sans-serif;
-  --font-mono: 'Geist Mono', ui-monospace, 'SF Mono', monospace;
+  /* Spacing scale — 4px base */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+
+  /* Fonts — IBM Plex Sans (body), JetBrains Mono (code/display) */
+  --font-body: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace;
+  --font-display: 'JetBrains Mono', ui-monospace, monospace;
 
   /* Gradient accent */
-  --gradient-accent: linear-gradient(135deg, #8b95f7 0%, #5ebd9e 100%);
+  --gradient-accent: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
 }
 
 @theme inline {
@@ -131,7 +140,7 @@
 }
 
 .animate-fade-up {
-  animation: fade-up 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: fade-up 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 .animate-pulse-soft {
@@ -163,17 +172,18 @@
   animation: ping-slow 2.5s cubic-bezier(0, 0, 0.2, 1) infinite;
 }
 
-/* Scrollbar styling */
+/* Scrollbar styling — thin, minimal */
 ::-webkit-scrollbar {
-  width: 6px;
+  width: 8px;
+  height: 8px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(92, 92, 101, 0.2);
-  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(92, 92, 101, 0.35);
+  background: rgba(255, 255, 255, 0.2);
 }

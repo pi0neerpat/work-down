@@ -5,6 +5,13 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import fs from 'fs'
 import { WebSocketServer } from 'ws'
+import {
+  createSessionEventStore,
+  appendChunkToEventStore,
+  getSessionEvents,
+  searchEvents,
+  answerFromEvents,
+} from './eventPipeline.js'
 
 const require = createRequire(import.meta.url)
 const pty = require('node-pty')
@@ -390,9 +397,31 @@ const server = app.listen(PORT, () => {
 
 // ── Persistent PTY sessions ──────────────────────────────
 // Sessions persist across WebSocket disconnects so clients can reconnect
-const ptySessions = new Map() // sessionId → { shell, repo, cwd, created, scrollback, alive, swarmFilePath }
+const ptySessions = new Map() // sessionId → { shell, repo, cwd, created, scrollback, alive, swarmFilePath, eventStore }
 
 const SCROLLBACK_LIMIT = 50000 // characters of recent output to buffer for reconnect
+
+function parseKindsParam(value) {
+  if (!value) return null
+  const kinds = new Set(
+    String(value)
+      .split(',')
+      .map(v => v.trim())
+      .filter(Boolean)
+  )
+  return kinds.size > 0 ? kinds : null
+}
+
+function collectEventStores({ scope = 'all', repo = null, sessionId = null } = {}) {
+  const stores = []
+  for (const [, session] of ptySessions) {
+    if (!session.eventStore) continue
+    if (scope === 'session' && sessionId && session.eventStore.sessionId !== sessionId) continue
+    if (scope === 'repo' && repo && session.eventStore.repo !== repo) continue
+    stores.push(session.eventStore)
+  }
+  return stores
+}
 
 function createPtySession(sessionId, cwd, repoName, swarmFilePath) {
   const shell = pty.spawn('/bin/zsh', ['--login'], {
@@ -412,9 +441,15 @@ function createPtySession(sessionId, cwd, repoName, swarmFilePath) {
     alive: true,
     ws: null, // current attached WebSocket
     swarmFilePath: swarmFilePath || null,
+    eventStore: createSessionEventStore({
+      sessionId,
+      repo: repoName || null,
+      baseDir: HUB_DIR,
+    }),
   }
 
   shell.onData((data) => {
+    appendChunkToEventStore(session.eventStore, data)
     // Buffer output for reconnect
     session.scrollback += data
     if (session.scrollback.length > SCROLLBACK_LIMIT) {
@@ -457,10 +492,97 @@ app.get('/api/sessions', (req, res) => {
   const sessions = []
   for (const [id, s] of ptySessions) {
     if (s.alive) {
-      sessions.push({ id, repo: s.repo, created: s.created })
+      sessions.push({
+        id,
+        repo: s.repo,
+        created: s.created,
+        summary: s.eventStore?.summary || null,
+        eventCount: s.eventStore?.events?.length || 0,
+      })
     }
   }
   res.json({ sessions })
+})
+
+app.get('/api/sessions/:id/events', (req, res) => {
+  const session = ptySessions.get(req.params.id)
+  if (!session || !session.eventStore) return res.status(404).json({ error: 'session not found' })
+
+  const limit = parseInt(req.query.limit, 10) || 120
+  const cursor = req.query.cursor || null
+  const kinds = parseKindsParam(req.query.kinds)
+
+  const page = getSessionEvents(session.eventStore, { cursor, limit, kinds })
+  res.json({
+    sessionId: req.params.id,
+    items: page.items,
+    nextCursor: page.nextCursor,
+  })
+})
+
+app.get('/api/sessions/:id/summary', (req, res) => {
+  const session = ptySessions.get(req.params.id)
+  if (!session || !session.eventStore) return res.status(404).json({ error: 'session not found' })
+
+  const events = session.eventStore.events
+  const latest = events[events.length - 1] || null
+
+  res.json({
+    sessionId: req.params.id,
+    repo: session.repo,
+    alive: session.alive,
+    eventCount: events.length,
+    latestEvent: latest,
+    summary: {
+      ...session.eventStore.summary,
+      filesTouched: session.eventStore.summary.filesTouched || [],
+      toolCalls: session.eventStore.summary.toolCalls || 0,
+      currentStep: session.eventStore.summary.lastStep || null,
+    },
+  })
+})
+
+app.post('/api/sessions/:id/chat', async (req, res) => {
+  const session = ptySessions.get(req.params.id)
+  if (!session || !session.eventStore) return res.status(404).json({ error: 'session not found' })
+
+  const {
+    message,
+    scope = 'session',
+    provider = 'auto',
+    model = null,
+    includeRaw = false,
+  } = req.body || {}
+
+  const stores = collectEventStores({
+    scope: scope === 'session' ? 'session' : scope,
+    sessionId: req.params.id,
+    repo: session.repo,
+  })
+
+  const events = stores.flatMap(s => s.events)
+  const contextEvents = includeRaw ? events : events.map(evt => ({ ...evt, raw: undefined }))
+
+  const response = await answerFromEvents({
+    message: String(message || ''),
+    events: contextEvents,
+    provider,
+    model,
+  })
+
+  res.json(response)
+})
+
+app.get('/api/events/search', (req, res) => {
+  const q = req.query.q || ''
+  const scope = req.query.scope || 'all'
+  const sessionId = req.query.sessionId || null
+  const repo = req.query.repo || null
+  const limit = parseInt(req.query.limit, 10) || 50
+
+  const stores = collectEventStores({ scope, repo, sessionId })
+  const items = searchEvents(stores, { q, scope, repo, sessionId, limit })
+  res.json({ items })
 })
 
 // Kill a specific PTY session
@@ -538,6 +660,9 @@ wss.on('connection', (ws, req) => {
       const [cols, rows] = str.slice(8).split(',').map(Number)
       if (cols > 0 && rows > 0) session.shell.resize(cols, rows)
       return
+    }
+    if (str.trim()) {
+      appendChunkToEventStore(session.eventStore, `\nUSER> ${stripAnsi(str)}\n`)
     }
     session.shell.write(str)
   })

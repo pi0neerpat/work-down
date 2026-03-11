@@ -1,10 +1,125 @@
-import { useState, useEffect } from 'react'
-import { CheckCircle, XCircle, AlertCircle, Loader, Clock, Ban, Square, Activity, ListChecks } from 'lucide-react'
+import { useState, useEffect, useMemo } from 'react'
+import { CheckCircle, XCircle, Loader, Clock, Square, Activity, ListChecks, FileCode2, Wrench, Lightbulb } from 'lucide-react'
 import Markdown from 'react-markdown'
 import { cn, timeAgo } from '../lib/utils'
 import { statusConfig, validationConfig } from '../lib/statusConfig'
 import { repoIdentityColors } from '../lib/constants'
 import { mdComponents } from './mdComponents'
+
+function parseStructuredResults(raw) {
+  if (!raw) return null
+  const lines = raw.split('\n')
+
+  const fileEdited = []
+  const changes = []
+  const reasons = []
+
+  let section = null
+
+  for (const line of lines) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+
+    const headerMatch = trimmed.match(/^##+\s*(.+)$/)
+    if (headerMatch) {
+      const label = headerMatch[1].toLowerCase()
+      if (label.includes('file')) section = 'file'
+      else if (label.includes('change')) section = 'changes'
+      else if (label.includes('reason') || label.includes('why')) section = 'reasons'
+      else section = null
+      continue
+    }
+
+    const fileMatch = trimmed.match(/^files?\s+edited\s*:\s*(.+)$/i) || trimmed.match(/^file\s+edited\s*:\s*(.+)$/i)
+    if (fileMatch) {
+      fileEdited.push(fileMatch[1])
+      continue
+    }
+
+    const reasonMatch = trimmed.match(/^reason\s*:\s*(.+)$/i)
+    if (reasonMatch) {
+      reasons.push(reasonMatch[1])
+      continue
+    }
+
+    if (section === 'file') {
+      fileEdited.push(trimmed.replace(/^[-*]\s*/, ''))
+    } else if (section === 'changes') {
+      changes.push(trimmed.replace(/^[-*]\s*/, ''))
+    } else if (section === 'reasons') {
+      reasons.push(trimmed.replace(/^[-*]\s*/, ''))
+    } else if (/^[-*]\s+/.test(trimmed)) {
+      changes.push(trimmed.replace(/^[-*]\s*/, ''))
+    }
+  }
+
+  if (fileEdited.length === 0 && changes.length === 0 && reasons.length === 0) return null
+  return { fileEdited, changes, reasons }
+}
+
+function ResultsSummary({ text }) {
+  const parsed = useMemo(() => parseStructuredResults(text), [text])
+
+  if (!parsed) {
+    return (
+      <div className="rounded-lg border border-card-border bg-card px-5 py-4 text-sm text-foreground/90 leading-loose">
+        <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-2">Result Summary</p>
+        <Markdown components={mdComponents}>{text}</Markdown>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-3">
+      {parsed.fileEdited.length > 0 && (
+        <div className="rounded-lg border border-card-border bg-card px-4 py-3">
+          <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-2 flex items-center gap-1.5">
+            <FileCode2 size={12} />
+            File Edited
+          </p>
+          <div className="space-y-1">
+            {parsed.fileEdited.map((item, i) => (
+              <p key={`${item}-${i}`} className="font-mono text-[12px] text-foreground/90 break-all" style={{ fontFamily: 'var(--font-mono)' }}>
+                {item}
+              </p>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {parsed.changes.length > 0 && (
+        <div className="rounded-lg border border-card-border bg-card px-4 py-3">
+          <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-2 flex items-center gap-1.5">
+            <Wrench size={12} />
+            Changes
+          </p>
+          <ul className="space-y-1 text-[13px] text-foreground/85 leading-relaxed">
+            {parsed.changes.map((item, i) => (
+              <li key={`${item}-${i}`} className="flex items-start gap-2">
+                <span className="mt-1.5 w-1 h-1 rounded-full bg-status-active shrink-0" />
+                <span>{item}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {parsed.reasons.length > 0 && (
+        <div className="rounded-lg border border-card-border bg-card px-4 py-3">
+          <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-2 flex items-center gap-1.5">
+            <Lightbulb size={12} />
+            Reason
+          </p>
+          <div className="text-[13px] text-foreground/85 leading-loose space-y-1">
+            {parsed.reasons.map((item, i) => (
+              <p key={`${item}-${i}`}>{item}</p>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
 
 export default function ResultsPanel({ agentId, onSwarmRefresh, onOverviewRefresh }) {
   const [detail, setDetail] = useState(null)
@@ -147,7 +262,6 @@ export default function ResultsPanel({ agentId, onSwarmRefresh, onOverviewRefres
     }
   }
 
-  // Empty state — no agent selected
   if (!agentId) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -195,37 +309,21 @@ export default function ResultsPanel({ agentId, onSwarmRefresh, onOverviewRefres
 
   return (
     <div className="animate-fade-up">
-      {/* Header */}
       <div className="flex items-start gap-3 mb-5">
-        <div className={cn(
-          'w-10 h-10 rounded-lg flex items-center justify-center shrink-0',
-          st.bg,
-        )}>
-          <StatusIcon
-            size={20}
-            className={cn(st.color, detail.status === 'in_progress' && 'animate-spin-slow')}
-          />
+        <div className={cn('w-10 h-10 rounded-lg flex items-center justify-center shrink-0', st.bg)}>
+          <StatusIcon size={20} className={cn(st.color, detail.status === 'in_progress' && 'animate-spin-slow')} />
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <h2 className="text-base font-semibold text-foreground">
-              {detail.taskName || detail.id}
-            </h2>
+            <h2 className="text-base font-semibold text-foreground">{detail.taskName || detail.id}</h2>
             <span
               className="text-[10px] font-medium px-1.5 py-0.5 rounded capitalize"
-              style={{
-                background: `${repoColor}15`,
-                color: repoColor,
-                border: `1px solid ${repoColor}30`,
-              }}
+              style={{ background: `${repoColor}15`, color: repoColor, border: `1px solid ${repoColor}30` }}
             >
               {detail.repo}
             </span>
             {val && (
-              <span className={cn(
-                'text-[10px] px-2 py-0.5 rounded-full border font-medium',
-                val.bg, val.color, val.border
-              )}>
+              <span className={cn('text-[10px] px-2 py-0.5 rounded-full border font-medium', val.bg, val.color, val.border)}>
                 {val.label}
               </span>
             )}
@@ -246,7 +344,6 @@ export default function ResultsPanel({ agentId, onSwarmRefresh, onOverviewRefres
           </div>
         </div>
 
-        {/* Kill button for in_progress */}
         {detail.status === 'in_progress' && (
           <button
             onClick={handleKill}
@@ -258,28 +355,18 @@ export default function ResultsPanel({ agentId, onSwarmRefresh, onOverviewRefres
             )}
             disabled={killing}
           >
-            {killing ? (
-              <Loader size={12} className="animate-spin" />
-            ) : confirmKill ? (
-              'Confirm Stop?'
-            ) : (
-              <span className="flex items-center gap-1.5"><Square size={12} /> Stop</span>
-            )}
+            {killing ? <Loader size={12} className="animate-spin" /> : confirmKill ? 'Confirm Stop?' : <span className="flex items-center gap-1.5"><Square size={12} /> Stop</span>}
           </button>
         )}
       </div>
 
-      {/* Results */}
       {detail.results && (
         <div className="mb-5">
           <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-2">Results</p>
-          <div className="rounded-lg border border-card-border bg-card px-4 py-3 text-xs text-foreground/90 leading-relaxed">
-            <Markdown components={mdComponents}>{detail.results}</Markdown>
-          </div>
+          <ResultsSummary text={detail.results} />
         </div>
       )}
 
-      {/* Validation notes */}
       {detail.validationNotes && (
         <div className="mb-5">
           <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-2">Validation</p>
@@ -289,21 +376,14 @@ export default function ResultsPanel({ agentId, onSwarmRefresh, onOverviewRefres
         </div>
       )}
 
-      {/* Feedback flash */}
       {feedback && (
-        <div
-          className={cn(
-            'rounded-md px-3 py-2 text-xs font-medium animate-fade-up mb-4',
-            feedback.isError
-              ? 'bg-status-failed-bg text-status-failed border border-status-failed-border'
-              : 'bg-status-active-bg text-status-active border border-status-active-border'
-          )}
-        >
+        <div className={cn('rounded-md px-3 py-2 text-xs font-medium animate-fade-up mb-4', feedback.isError
+          ? 'bg-status-failed-bg text-status-failed border border-status-failed-border'
+          : 'bg-status-active-bg text-status-active border border-status-active-border')}>
           {feedback.msg}
         </div>
       )}
 
-      {/* Validate / Reject action buttons */}
       {canAct && (
         <div className="space-y-2">
           <div className="flex items-center gap-2">
@@ -334,62 +414,39 @@ export default function ResultsPanel({ agentId, onSwarmRefresh, onOverviewRefres
               <XCircle size={13} />
               Reject
             </button>
+            {!taskMarked && detail.status === 'completed' && (
+              <button
+                onClick={handleMarkDone}
+                disabled={markingDone}
+                className={cn(
+                  'flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors',
+                  'border border-border bg-card text-foreground/80 hover:bg-card-hover disabled:opacity-50'
+                )}
+                title="Mark matching task as done in todo"
+              >
+                {markingDone ? <Loader size={13} className="animate-spin" /> : <ListChecks size={13} />}
+                Mark Task Done
+              </button>
+            )}
           </div>
 
           {showRejectInput && (
             <div className="flex items-center gap-2 animate-slide-in">
               <input
-                type="text"
                 value={rejectNotes}
-                onChange={e => setRejectNotes(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter') handleReject() }}
-                placeholder="Reason for rejection (required)"
-                className="flex-1 px-2.5 py-1.5 rounded-md border border-border bg-background text-xs text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:border-status-failed-border"
-                autoFocus
+                onChange={(e) => setRejectNotes(e.target.value)}
+                placeholder="Reason for rejection..."
+                className="flex-1 h-8 rounded-md border border-border bg-card px-2.5 text-xs text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:border-status-review/40"
               />
               <button
                 onClick={handleReject}
-                disabled={actionLoading || !rejectNotes.trim()}
-                className={cn(
-                  'px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors',
-                  'border border-status-failed-border bg-status-failed-bg text-status-failed',
-                  'hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed'
-                )}
+                disabled={!rejectNotes.trim() || actionLoading}
+                className="h-8 px-3 rounded-md text-xs font-medium bg-status-failed text-white disabled:opacity-50"
               >
                 Submit
               </button>
-              <button
-                onClick={() => { setShowRejectInput(false); setRejectNotes('') }}
-                className="px-2.5 py-1.5 rounded-md text-xs text-muted-foreground hover:text-foreground transition-colors"
-              >
-                Cancel
-              </button>
             </div>
           )}
-        </div>
-      )}
-
-      {/* Mark task as done — shown after validation */}
-      {detail.validation === 'validated' && detail.taskName && !taskMarked && (
-        <div className="mt-4">
-          <button
-            onClick={handleMarkDone}
-            disabled={markingDone}
-            className={cn(
-              'flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors',
-              'border border-status-validated-border bg-status-validated-bg text-status-validated',
-              'hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed'
-            )}
-          >
-            {markingDone ? <Loader size={13} className="animate-spin" /> : <ListChecks size={13} />}
-            Mark Todo as Done
-          </button>
-        </div>
-      )}
-      {taskMarked && (
-        <div className="mt-4 flex items-center gap-1.5 text-xs text-status-active/70">
-          <CheckCircle size={13} />
-          <span>Task marked as done</span>
         </div>
       )}
     </div>

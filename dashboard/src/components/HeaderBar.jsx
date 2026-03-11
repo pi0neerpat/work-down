@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Activity, AlertCircle, ShieldOff, Shield } from 'lucide-react'
+import { Activity, AlertCircle, ShieldOff, Shield, Search, Command } from 'lucide-react'
 import { cn } from '../lib/utils'
 
 function ConnectionDot({ connected, lastRefresh }) {
@@ -17,13 +17,9 @@ function ConnectionDot({ connected, lastRefresh }) {
     <div className="flex items-center gap-1.5">
       <span className="relative flex h-1.5 w-1.5">
         {connected && (
-          <span className="animate-ping-slow absolute inline-flex h-full w-full rounded-full"
-            style={{ background: connected ? 'var(--status-active)' : 'var(--status-failed)' }}
-          />
+          <span className="animate-ping-slow absolute inline-flex h-full w-full rounded-full" style={{ background: connected ? 'var(--status-active)' : 'var(--status-failed)' }} />
         )}
-        <span className="relative inline-flex rounded-full h-1.5 w-1.5"
-          style={{ background: connected ? 'var(--status-active)' : 'var(--status-failed)' }}
-        />
+        <span className="relative inline-flex rounded-full h-1.5 w-1.5" style={{ background: connected ? 'var(--status-active)' : 'var(--status-failed)' }} />
       </span>
       <span className="text-[10px] text-muted-foreground/70 font-mono" style={{ fontFamily: 'var(--font-mono)' }}>
         {connected ? ago : 'offline'}
@@ -46,14 +42,10 @@ function ResetCountdown({ resetsAt }) {
       const totalMin = Math.ceil(remaining / 60000)
       const hrs = Math.floor(totalMin / 60)
       const mins = totalMin % 60
-      if (hrs > 0) {
-        setText(`${hrs}h ${mins}m`)
-      } else {
-        setText(`${mins}m`)
-      }
+      setText(hrs > 0 ? `${hrs}h ${mins}m` : `${mins}m`)
     }
     tick()
-    const id = setInterval(tick, 30000) // update every 30s (minutes-level precision)
+    const id = setInterval(tick, 30000)
     return () => clearInterval(id)
   }, [resetsAt])
 
@@ -66,7 +58,21 @@ function ResetCountdown({ resetsAt }) {
   )
 }
 
-export default function HeaderBar({ overview, swarm, lastRefresh, error, skipPermissions, onToggleSkipPermissions, contextUsage, contextResetInfo }) {
+export default function HeaderBar({
+  overview,
+  swarm,
+  lastRefresh,
+  error,
+  skipPermissions,
+  onToggleSkipPermissions,
+  contextUsage,
+  contextResetInfo,
+  searchQuery,
+  onSearchQueryChange,
+  searchResults,
+  onSelectSearchResult,
+  onOpenCommandPalette,
+}) {
   const activeAgents = swarm?.summary?.active || 0
   const needsReview = swarm?.summary?.needsValidation || 0
 
@@ -78,16 +84,49 @@ export default function HeaderBar({ overview, swarm, lastRefresh, error, skipPer
 
   return (
     <header className="sticky top-0 z-50 bg-background border-b border-border">
-      <div className="px-4 py-2 flex items-center justify-between">
-        {/* Left: brand */}
-        <div className="flex items-center gap-2.5">
+      <div className="px-4 py-2 flex items-center gap-4">
+        <div className="flex items-center gap-2.5 shrink-0">
           <h1 className="text-sm font-medium text-foreground leading-none" style={{ fontFamily: 'var(--font-display)' }}>
             {title}
           </h1>
         </div>
 
-        {/* Right: badges + connection */}
-        <div className="flex items-center gap-2.5">
+        <div className="relative flex-1 max-w-lg">
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-md border border-border bg-card/50">
+            <Search size={13} className="text-muted-foreground" />
+            <input
+              value={searchQuery}
+              onChange={(e) => onSearchQueryChange?.(e.target.value)}
+              placeholder="Search repos, tasks, workers"
+              className="w-full bg-transparent text-[12px] text-foreground placeholder:text-muted-foreground/50 focus:outline-none"
+            />
+            <button
+              onClick={() => onOpenCommandPalette?.()}
+              className="inline-flex items-center gap-1 text-[10px] text-muted-foreground/60 hover:text-foreground"
+              title="Open command palette"
+            >
+              <Command size={11} />
+              K
+            </button>
+          </div>
+
+          {searchQuery && searchResults?.length > 0 && (
+            <div className="absolute left-0 right-0 top-[calc(100%+6px)] z-50 rounded-lg border border-card-border bg-background-raised shadow-xl max-h-64 overflow-y-auto p-1.5">
+              {searchResults.slice(0, 8).map(item => (
+                <button
+                  key={item.key}
+                  onClick={() => onSelectSearchResult?.(item)}
+                  className="w-full text-left px-2.5 py-2 rounded-md hover:bg-card transition-colors"
+                >
+                  <p className="text-[12px] text-foreground truncate">{item.label}</p>
+                  <p className="text-[10px] text-muted-foreground/70 truncate">{item.subtitle}</p>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2.5 shrink-0">
           {activeAgents > 0 && (
             <span className="flex items-center gap-1.5 text-[10px] font-medium px-2 py-0.5 rounded bg-status-active-bg text-status-active">
               <Activity size={10} strokeWidth={2.5} />

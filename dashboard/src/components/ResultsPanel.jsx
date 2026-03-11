@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { CheckCircle, XCircle, AlertCircle, Loader, Clock, Ban, Square, Activity } from 'lucide-react'
+import { CheckCircle, XCircle, AlertCircle, Loader, Clock, Ban, Square, Activity, ListChecks } from 'lucide-react'
 import Markdown from 'react-markdown'
 import { cn, timeAgo } from '../lib/utils'
 import { statusConfig } from './SwarmDetail'
@@ -42,6 +42,8 @@ export default function ResultsPanel({ agentId, onSwarmRefresh, onOverviewRefres
   const [feedback, setFeedback] = useState(null)
   const [confirmKill, setConfirmKill] = useState(false)
   const [killing, setKilling] = useState(false)
+  const [taskMarked, setTaskMarked] = useState(false)
+  const [markingDone, setMarkingDone] = useState(false)
 
   useEffect(() => {
     if (!agentId) { setDetail(null); return }
@@ -53,6 +55,8 @@ export default function ResultsPanel({ agentId, onSwarmRefresh, onOverviewRefres
     setRejectNotes('')
     setFeedback(null)
     setConfirmKill(false)
+    setTaskMarked(false)
+    setMarkingDone(false)
 
     async function fetchDetail() {
       try {
@@ -146,6 +150,29 @@ export default function ResultsPanel({ agentId, onSwarmRefresh, onOverviewRefres
     setConfirmKill(false)
   }
 
+  async function handleMarkDone() {
+    if (!detail?.taskName || !detail?.repo) return
+    setMarkingDone(true)
+    try {
+      const res = await fetch('/api/tasks/done-by-text', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repo: detail.repo, text: detail.taskName }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.error || `${res.status} ${res.statusText}`)
+      }
+      setTaskMarked(true)
+      showFeedbackMsg('Task marked as done')
+      onOverviewRefresh?.()
+    } catch (err) {
+      showFeedbackMsg(err.message || 'Failed to mark task', true)
+    } finally {
+      setMarkingDone(false)
+    }
+  }
+
   // Empty state — no agent selected
   if (!agentId) {
     return (
@@ -202,7 +229,7 @@ export default function ResultsPanel({ agentId, onSwarmRefresh, onOverviewRefres
         )}>
           <StatusIcon
             size={20}
-            className={cn(st.color, detail.status === 'in_progress' && 'animate-spin')}
+            className={cn(st.color, detail.status === 'in_progress' && 'animate-spin-slow')}
           />
         </div>
         <div className="flex-1 min-w-0">
@@ -365,6 +392,30 @@ export default function ResultsPanel({ agentId, onSwarmRefresh, onOverviewRefres
               </button>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Mark task as done — shown after validation */}
+      {detail.validation === 'validated' && detail.taskName && !taskMarked && (
+        <div className="mt-4">
+          <button
+            onClick={handleMarkDone}
+            disabled={markingDone}
+            className={cn(
+              'flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors',
+              'border border-status-validated-border bg-status-validated-bg text-status-validated',
+              'hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed'
+            )}
+          >
+            {markingDone ? <Loader size={13} className="animate-spin" /> : <ListChecks size={13} />}
+            Mark Todo as Done
+          </button>
+        </div>
+      )}
+      {taskMarked && (
+        <div className="mt-4 flex items-center gap-1.5 text-xs text-status-active/70">
+          <CheckCircle size={13} />
+          <span>Task marked as done</span>
         </div>
       )}
     </div>

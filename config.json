@@ -25,5 +25,6 @@
       "activityFile": "activity-log.md"
     }
   ],
-  "hubRoot": "/Volumes/My Shared Files/scribular/hub"
+  "hubRoot": "/Volumes/My Shared Files/scribular/hub",
+  "monthlyBudget": 200
 }

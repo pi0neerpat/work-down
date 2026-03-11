@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { Circle, CheckCircle2, ListTodo, Plus, Loader, ArrowRightLeft, Save, RotateCcw, X, AlertTriangle, Loader2, Play, ChevronDown, ChevronRight } from 'lucide-react'
+import { useState, useEffect, useRef, useCallback } from 'react'
+import { Circle, CheckCircle2, ListTodo, Plus, Loader, ArrowRightLeft, Save, RotateCcw, X, AlertTriangle, Loader2, Play, ChevronDown, ChevronRight, Pencil, Check, Eye } from 'lucide-react'
 import { cn } from '../lib/utils'
 
 const repoIdentityColors = {
@@ -130,7 +130,45 @@ function CheckpointControls({ repo, onRefresh }) {
   )
 }
 
-export default function TaskBoard({ overview, onOverviewRefresh, selectedRepo, onStartTask }) {
+function AutoSizeTextarea({ value, onChange, onKeyDown, autoFocus, disabled, className, placeholder }) {
+  const ref = useRef(null)
+
+  const resize = useCallback(() => {
+    const el = ref.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = el.scrollHeight + 'px'
+  }, [])
+
+  useEffect(() => {
+    resize()
+  }, [value, resize])
+
+  useEffect(() => {
+    if (autoFocus && ref.current) {
+      ref.current.focus()
+      // Place cursor at end
+      const len = ref.current.value.length
+      ref.current.setSelectionRange(len, len)
+    }
+  }, [autoFocus])
+
+  return (
+    <textarea
+      ref={ref}
+      value={value}
+      onChange={(e) => { onChange(e); resize() }}
+      onKeyDown={onKeyDown}
+      disabled={disabled}
+      placeholder={placeholder}
+      className={className}
+      rows={1}
+      style={{ resize: 'none', overflow: 'hidden' }}
+    />
+  )
+}
+
+export default function TaskBoard({ overview, onOverviewRefresh, selectedRepo, onStartTask, activeWorkers, onOpenBee }) {
   const repos = overview?.repos || []
   const activeTab = selectedRepo || (repos.length > 0 ? repos[0].name : '')
   const [addingTask, setAddingTask] = useState(false)
@@ -138,9 +176,13 @@ export default function TaskBoard({ overview, onOverviewRefresh, selectedRepo, o
   const [movingTask, setMovingTask] = useState(null)
   const [collapsedDoneSections, setCollapsedDoneSections] = useState(new Set())
   const [completingTask, setCompletingTask] = useState(null)
+  const [editingTask, setEditingTask] = useState(null) // taskNum being edited
+  const [editText, setEditText] = useState('')
+  const [savingEdit, setSavingEdit] = useState(false)
 
   useEffect(() => {
     setMovingTask(null)
+    setEditingTask(null)
   }, [activeTab])
 
   if (repos.length === 0) return null
@@ -226,6 +268,32 @@ export default function TaskBoard({ overview, onOverviewRefresh, selectedRepo, o
     }
   }
 
+  async function handleSaveEdit(taskNum) {
+    const text = editText.trim()
+    if (!text || savingEdit) return
+
+    setSavingEdit(true)
+    try {
+      const res = await fetch('/api/tasks/edit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repo: activeTab, taskNum, newText: text }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        console.error('Failed to edit task:', err.error || res.statusText)
+        return
+      }
+      setEditingTask(null)
+      setEditText('')
+      if (onOverviewRefresh) await onOverviewRefresh()
+    } catch (err) {
+      console.error('Failed to edit task:', err)
+    } finally {
+      setSavingEdit(false)
+    }
+  }
+
   function toggleDoneSection(sectionIndex) {
     setCollapsedDoneSections(prev => {
       const next = new Set(prev)
@@ -236,6 +304,17 @@ export default function TaskBoard({ overview, onOverviewRefresh, selectedRepo, o
       }
       return next
     })
+  }
+
+  // Find active worker session for a given task text + repo
+  function findActiveWorker(taskText, repoName) {
+    if (!activeWorkers || activeWorkers.size === 0) return null
+    for (const [sessionId, info] of activeWorkers) {
+      if (info.taskText === taskText && info.repoName === repoName) {
+        return sessionId
+      }
+    }
+    return null
   }
 
   let globalTaskNum = 0
@@ -284,77 +363,156 @@ export default function TaskBoard({ overview, onOverviewRefresh, selectedRepo, o
                         </span>
                       </div>
                     )}
-                    <ul className="space-y-0.5">
+                    <ul className="space-y-2">
                       {openTasks.map((task, j) => {
                         globalTaskNum++
                         const taskNum = globalTaskNum
+                        const workerSessionId = findActiveWorker(task.text, activeRepo.name)
+                        const isBeingWorked = !!workerSessionId
 
                         return (
                           <li
                             key={`open-${j}`}
-                            className="flex items-start gap-2 px-3 py-2.5 rounded-lg text-[14px] leading-relaxed text-foreground/85 hover:bg-card-hover/40 group transition-colors"
+                            className={cn(
+                              "flex items-start gap-2 px-3 py-2.5 rounded-lg text-[14px] leading-relaxed transition-colors",
+                              "border border-border/50 bg-background/30",
+                              isBeingWorked
+                                ? "text-foreground/85 bg-status-active-bg/30 border-status-active/20"
+                                : "text-foreground/85 hover:bg-card-hover/40 hover:border-border/70 group"
+                            )}
                           >
-                            <button
-                              onClick={() => handleCompleteTask(taskNum)}
-                              disabled={completingTask === taskNum}
-                              className="mt-0.5 shrink-0 text-muted-foreground/25 hover:text-status-active transition-colors"
-                              title="Mark as done"
-                            >
-                              {completingTask === taskNum
-                                ? <Loader size={14} className="animate-spin text-muted-foreground/40" />
-                                : <Circle size={14} />
-                              }
-                            </button>
-                            <span className="flex-1">{task.text}</span>
-                            <button
-                              onClick={() => onStartTask?.(task.text, activeTab)}
-                              className="shrink-0 opacity-0 group-hover:opacity-100 flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-muted-foreground/40 hover:text-status-active hover:bg-status-active-bg transition-all"
-                              title="Start task in terminal"
-                            >
-                              <Play size={9} />
-                              <span>Start</span>
-                            </button>
-                            <div className="relative shrink-0 flex items-center gap-0.5">
+                            {isBeingWorked ? (
+                              <span className="mt-0.5 shrink-0 text-status-active">
+                                <Loader size={14} className="animate-spin" />
+                              </span>
+                            ) : (
                               <button
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  setMovingTask(movingTask === taskNum ? null : taskNum)
-                                }}
-                                className={cn(
-                                  'p-0.5 rounded transition-all',
-                                  movingTask === taskNum
-                                    ? 'opacity-100 text-primary'
-                                    : 'opacity-0 group-hover:opacity-100 text-muted-foreground/40 hover:text-primary/70'
-                                )}
-                                title="Move to another repo"
+                                onClick={() => handleCompleteTask(taskNum)}
+                                disabled={completingTask === taskNum}
+                                className="mt-0.5 shrink-0 text-muted-foreground/25 hover:text-status-active transition-colors"
+                                title="Mark as done"
                               >
-                                <ArrowRightLeft size={12} />
+                                {completingTask === taskNum
+                                  ? <Loader size={14} className="animate-spin text-muted-foreground/40" />
+                                  : <Circle size={14} />
+                                }
                               </button>
-                              {movingTask === taskNum && (
-                                <div className="absolute right-0 top-full mt-1 z-10 flex gap-1 bg-card border border-card-border rounded-lg p-1.5 shadow-lg">
-                                  {repos
-                                    .filter(r => r.name !== activeTab)
-                                    .map(r => (
-                                      <button
-                                        key={r.name}
-                                        onClick={(e) => {
-                                          e.stopPropagation()
-                                          handleMoveTask(taskNum, r.name)
-                                        }}
-                                        className="px-2 py-0.5 text-[10px] font-medium rounded-full border transition-colors hover:brightness-110 capitalize whitespace-nowrap"
-                                        style={{
-                                          color: repoIdentityColors[r.name] || 'var(--primary)',
-                                          borderColor: `${repoIdentityColors[r.name] || 'var(--primary)'}30`,
-                                          backgroundColor: `${repoIdentityColors[r.name] || 'var(--primary)'}10`,
-                                        }}
-                                      >
-                                        {r.name}
-                                      </button>
-                                    ))
-                                  }
+                            )}
+                            {isBeingWorked ? (
+                              <span className="flex-1 whitespace-pre-wrap">
+                                {task.text}
+                              </span>
+                            ) : editingTask === taskNum ? (
+                              <div className="flex-1 flex flex-col gap-1.5">
+                                <AutoSizeTextarea
+                                  value={editText}
+                                  onChange={(e) => setEditText(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Escape') { setEditingTask(null); setEditText('') }
+                                    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                                      e.preventDefault()
+                                      handleSaveEdit(taskNum)
+                                    }
+                                  }}
+                                  autoFocus
+                                  disabled={savingEdit}
+                                  className="w-full bg-background/60 border border-primary/30 rounded-md px-2.5 py-1.5 text-[13px] text-foreground leading-relaxed focus:outline-none focus:border-primary/50 transition-colors"
+                                />
+                                <div className="flex items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleSaveEdit(taskNum)}
+                                    disabled={savingEdit || !editText.trim()}
+                                    className="p-0.5 rounded text-status-active hover:bg-status-active-bg transition-colors disabled:opacity-30"
+                                    title="Save (Cmd+Enter)"
+                                  >
+                                    {savingEdit ? <Loader size={12} className="animate-spin" /> : <Check size={12} />}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => { setEditingTask(null); setEditText('') }}
+                                    className="p-0.5 rounded text-muted-foreground/40 hover:text-foreground transition-colors"
+                                    title="Cancel (Escape)"
+                                  >
+                                    <X size={12} />
+                                  </button>
+                                  <span className="text-[10px] text-muted-foreground/30 ml-1">Cmd+Enter to save</span>
                                 </div>
-                              )}
-                            </div>
+                              </div>
+                            ) : (
+                              <span
+                                className="flex-1 cursor-text whitespace-pre-wrap"
+                                onDoubleClick={() => { setEditingTask(taskNum); setEditText(task.text) }}
+                              >
+                                {task.text}
+                              </span>
+                            )}
+                            {isBeingWorked ? (
+                              <button
+                                onClick={() => onOpenBee?.(workerSessionId)}
+                                className="shrink-0 flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium text-status-active bg-status-active-bg hover:brightness-110 transition-all"
+                                title="Open bee terminal"
+                              >
+                                <Eye size={10} />
+                                <span>View</span>
+                              </button>
+                            ) : (
+                              <>
+                                {editingTask !== taskNum && (
+                                  <button
+                                    onClick={() => onStartTask?.(task.text, activeTab)}
+                                    className="shrink-0 opacity-0 group-hover:opacity-100 flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-muted-foreground/40 hover:text-status-active hover:bg-status-active-bg transition-all"
+                                    title="Start task in terminal"
+                                  >
+                                    <Play size={9} />
+                                    <span>Start</span>
+                                  </button>
+                                )}
+                                {editingTask !== taskNum && (
+                                <div className="relative shrink-0 flex items-center gap-0.5">
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      setMovingTask(movingTask === taskNum ? null : taskNum)
+                                    }}
+                                    className={cn(
+                                      'p-0.5 rounded transition-all',
+                                      movingTask === taskNum
+                                        ? 'opacity-100 text-primary'
+                                        : 'opacity-0 group-hover:opacity-100 text-muted-foreground/40 hover:text-primary/70'
+                                    )}
+                                    title="Move to another repo"
+                                  >
+                                    <ArrowRightLeft size={12} />
+                                  </button>
+                                  {movingTask === taskNum && (
+                                    <div className="absolute right-0 top-full mt-1 z-10 flex gap-1 bg-card border border-card-border rounded-lg p-1.5 shadow-lg">
+                                      {repos
+                                        .filter(r => r.name !== activeTab)
+                                        .map(r => (
+                                          <button
+                                            key={r.name}
+                                            onClick={(e) => {
+                                              e.stopPropagation()
+                                              handleMoveTask(taskNum, r.name)
+                                            }}
+                                            className="px-2 py-0.5 text-[10px] font-medium rounded-full border transition-colors hover:brightness-110 capitalize whitespace-nowrap"
+                                            style={{
+                                              color: repoIdentityColors[r.name] || 'var(--primary)',
+                                              borderColor: `${repoIdentityColors[r.name] || 'var(--primary)'}30`,
+                                              backgroundColor: `${repoIdentityColors[r.name] || 'var(--primary)'}10`,
+                                            }}
+                                          >
+                                            {r.name}
+                                          </button>
+                                        ))
+                                      }
+                                    </div>
+                                  )}
+                                </div>
+                                )}
+                              </>
+                            )}
                           </li>
                         )
                       })}
@@ -378,7 +536,7 @@ export default function TaskBoard({ overview, onOverviewRefresh, selectedRepo, o
                                 className="flex items-start gap-2.5 px-3 py-2 rounded-lg text-[13px] leading-relaxed text-muted-foreground/35"
                               >
                                 <CheckCircle2 size={14} className="text-status-complete/30 mt-0.5 shrink-0" />
-                                <span className="flex-1 line-through">{task.text}</span>
+                                <span className="flex-1 line-through whitespace-pre-wrap">{task.text}</span>
                               </li>
                             ))}
                           </ul>
@@ -407,12 +565,17 @@ export default function TaskBoard({ overview, onOverviewRefresh, selectedRepo, o
               {activeRepo?.tasks?.doneCount || 0} done
             </span>
           </div>
-          <form onSubmit={handleAddTask} className="flex items-center gap-2">
-            <input
-              type="text"
+          <div className="flex items-start gap-2">
+            <AutoSizeTextarea
               value={newTaskText}
               onChange={(e) => setNewTaskText(e.target.value)}
-              placeholder="Add a task..."
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                  e.preventDefault()
+                  handleAddTask(e)
+                }
+              }}
+              placeholder="Add a task... (Cmd+Enter to submit)"
               disabled={addingTask}
               className={cn(
                 'flex-1 bg-background/40 border border-border rounded-lg px-3 py-2',
@@ -420,13 +583,13 @@ export default function TaskBoard({ overview, onOverviewRefresh, selectedRepo, o
                 'focus:outline-none focus:border-primary/30 focus:ring-1 focus:ring-primary/10',
                 'transition-colors disabled:opacity-50'
               )}
-              style={{ fontFamily: 'var(--font-mono)' }}
             />
             <button
-              type="submit"
+              type="button"
+              onClick={handleAddTask}
               disabled={!newTaskText.trim() || addingTask}
               className={cn(
-                'flex items-center justify-center w-8 h-8 rounded-lg',
+                'flex items-center justify-center w-8 h-8 rounded-lg mt-0.5',
                 'text-primary/60 hover:text-primary hover:bg-primary/10',
                 'disabled:opacity-20 disabled:cursor-not-allowed',
                 'transition-colors'
@@ -438,7 +601,7 @@ export default function TaskBoard({ overview, onOverviewRefresh, selectedRepo, o
                 <Plus size={14} />
               )}
             </button>
-          </form>
+          </div>
         </div>
       </div>
     </div>

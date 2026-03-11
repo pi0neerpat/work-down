@@ -11,12 +11,23 @@ const pty = require('node-pty')
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const {
   parseTaskFile, parseActivityLog, getGitInfo, parseSwarmFile, parseSwarmDir, loadConfig,
-  writeTaskDone, writeTaskAdd, writeTaskMove, writeSwarmValidation, writeSwarmKill,
+  writeTaskDone, writeTaskDoneByText, writeTaskAdd, writeTaskEdit, writeTaskMove,
+  writeSwarmValidation, writeSwarmKill, writeSwarmStatus,
   createCheckpoint, revertCheckpoint, dismissCheckpoint, listCheckpoints,
 } = require('../parsers')
 
 const HUB_DIR = path.resolve(__dirname, '..')
 const PORT = 3001
+
+// Strip ANSI escape sequences for clean log output
+function stripAnsi(str) {
+  return str
+    .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')   // CSI sequences
+    .replace(/\x1b\][^\x07]*\x07/g, '')        // OSC sequences
+    .replace(/\x1b\([A-Z]/g, '')               // Charset sequences
+    .replace(/\x1b[=>]/g, '')                  // Keypad mode
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '') // Control chars (keep \n \r \t)
+}
 
 let config
 try {
@@ -65,7 +76,7 @@ app.get('/api/overview', (req, res) => {
   const totalOpen = repos.reduce((s, r) => s + r.tasks.openCount, 0)
   const totalDone = repos.reduce((s, r) => s + r.tasks.doneCount, 0)
 
-  res.json({ hubRoot: config.hubRoot || HUB_DIR, stage, repos, totals: { openTasks: totalOpen, doneTasks: totalDone } })
+  res.json({ hubRoot: config.hubRoot || HUB_DIR, stage, repos, totals: { openTasks: totalOpen, doneTasks: totalDone }, monthlyBudget: config.monthlyBudget || null })
 })
 
 app.get('/api/swarm', (req, res) => {
@@ -190,6 +201,36 @@ app.post('/api/tasks/done', (req, res) => {
 
   try {
     const result = writeTaskDone(path.join(repoConfig.resolvedPath, repoConfig.taskFile), taskNum)
+    res.json({ ...result, repo })
+  } catch (err) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
+app.post('/api/tasks/done-by-text', (req, res) => {
+  const { repo, text } = req.body
+  if (!repo || !text) return res.status(400).json({ error: 'repo and text required' })
+
+  const repoConfig = findRepoConfig(repo)
+  if (!repoConfig) return res.status(404).json({ error: `repo "${repo}" not found` })
+
+  try {
+    const result = writeTaskDoneByText(path.join(repoConfig.resolvedPath, repoConfig.taskFile), text)
+    res.json({ ...result, repo })
+  } catch (err) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
+app.post('/api/tasks/edit', (req, res) => {
+  const { repo, taskNum, newText } = req.body
+  if (!repo || !taskNum || !newText) return res.status(400).json({ error: 'repo, taskNum, and newText required' })
+
+  const repoConfig = findRepoConfig(repo)
+  if (!repoConfig) return res.status(404).json({ error: `repo "${repo}" not found` })
+
+  try {
+    const result = writeTaskEdit(path.join(repoConfig.resolvedPath, repoConfig.taskFile), taskNum, newText)
     res.json({ ...result, repo })
   } catch (err) {
     res.status(400).json({ error: err.message })
@@ -349,11 +390,11 @@ const server = app.listen(PORT, () => {
 
 // ── Persistent PTY sessions ──────────────────────────────
 // Sessions persist across WebSocket disconnects so clients can reconnect
-const ptySessions = new Map() // sessionId → { shell, repo, cwd, created, scrollback, alive }
+const ptySessions = new Map() // sessionId → { shell, repo, cwd, created, scrollback, alive, swarmFilePath }
 
 const SCROLLBACK_LIMIT = 50000 // characters of recent output to buffer for reconnect
 
-function createPtySession(sessionId, cwd, repoName) {
+function createPtySession(sessionId, cwd, repoName, swarmFilePath) {
   const shell = pty.spawn('/bin/zsh', ['--login'], {
     name: 'xterm-256color',
     cols: 80,
@@ -370,6 +411,7 @@ function createPtySession(sessionId, cwd, repoName) {
     scrollback: '',
     alive: true,
     ws: null, // current attached WebSocket
+    swarmFilePath: swarmFilePath || null,
   }
 
   shell.onData((data) => {
@@ -386,6 +428,20 @@ function createPtySession(sessionId, cwd, repoName) {
 
   shell.onExit(() => {
     session.alive = false
+    // If there's an associated swarm file that's still in_progress, mark it completed
+    if (session.swarmFilePath) {
+      try {
+        if (fs.existsSync(session.swarmFilePath)) {
+          const agent = parseSwarmFile(session.swarmFilePath)
+          if (agent.status === 'in_progress') {
+            writeSwarmStatus(session.swarmFilePath, 'completed')
+            console.log(`PTY exit: marked swarm file as completed: ${session.swarmFilePath}`)
+          }
+        }
+      } catch (err) {
+        console.error(`Failed to update swarm status on PTY exit:`, err.message)
+      }
+    }
     if (session.ws) {
       try { session.ws.close() } catch {}
     }
@@ -423,6 +479,7 @@ wss.on('connection', (ws, req) => {
   const url = new URL(req.url, `http://${req.headers.host}`)
   const repoName = url.searchParams.get('repo')
   const sessionId = url.searchParams.get('session')
+  const swarmFilePath = url.searchParams.get('swarmFile')
 
   let session
 
@@ -441,6 +498,10 @@ wss.on('connection', (ws, req) => {
       try { session.ws.close() } catch {}
     }
     session.ws = ws
+    // Update swarm file path if provided (may not have been set on initial creation)
+    if (swarmFilePath && !session.swarmFilePath) {
+      session.swarmFilePath = swarmFilePath
+    }
 
     // Replay buffered output so the client sees recent context
     if (session.scrollback) {
@@ -456,7 +517,7 @@ wss.on('connection', (ws, req) => {
 
     const newId = sessionId || ('session-' + Date.now())
     try {
-      session = createPtySession(newId, cwd, repoName)
+      session = createPtySession(newId, cwd, repoName, swarmFilePath || null)
     } catch (err) {
       console.error('Failed to spawn PTY:', err.message)
       try {

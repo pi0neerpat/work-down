@@ -3,12 +3,15 @@ import { TerminalSquare, RefreshCw, RotateCcw, X } from 'lucide-react'
 import { cn } from '../lib/utils'
 import { useTerminal } from '../lib/useTerminal'
 
-function TerminalInstance({ sessionId, taskInfo, visible, skipPermissions, onKill, confirmKill, onUpdateSessionId }) {
+function TerminalInstance({ sessionId, taskInfo, visible, skipPermissions, onKill, confirmKill, onUpdateSessionId, onPromptSent, onContextUsage }) {
   const sendCommandRef = useRef(null)
   const sendRawRef = useRef(null)
-  const promptSentRef = useRef(false)
+  // Initialize from persisted state to survive remounts and page refreshes
+  const promptSentRef = useRef(taskInfo?.promptSent || false)
 
   const onConnected = useCallback(() => {
+    // If prompt was already sent (persisted), don't re-launch claude
+    if (promptSentRef.current) return
     // Launch claude interactively after shell is ready
     setTimeout(() => {
       const flags = skipPermissions ? ' --dangerously-skip-permissions' : ''
@@ -16,13 +19,40 @@ function TerminalInstance({ sessionId, taskInfo, visible, skipPermissions, onKil
     }, 500)
   }, [skipPermissions])
 
-  // Watch for terminal output to detect when claude is ready, then send /swarm prompt
+  // Watch for terminal output to detect context usage and when claude is ready
   const onTerminalData = useCallback((data) => {
+    // Parse context usage from Claude Code status bar (e.g. "$0.15 · 45%" or "$0.15 · 45% · Resets in 2h 3m")
+    const stripped = data.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '')
+    const ctxMatch = stripped.match(/\$[\d.]+[^%]{0,20}(\d{1,3})%/)
+    if (ctxMatch) {
+      const pct = parseInt(ctxMatch[1])
+      if (pct > 0 && pct <= 100) {
+        // Try to extract reset time from the same status line
+        // Patterns: "Resets in 2h 3m", "Resets in 2 hr 3 min", "resets in 45m", etc.
+        let resetMinutes = null
+        const resetMatch = stripped.match(/[Rr]esets?\s+in\s+(?:(\d+)\s*h(?:r|rs|ours?)?\s*)?(\d+)?\s*m(?:in|ins|inutes?)?/i)
+        if (resetMatch) {
+          const hours = parseInt(resetMatch[1]) || 0
+          const mins = parseInt(resetMatch[2]) || 0
+          resetMinutes = hours * 60 + mins
+        } else {
+          // Also try "Resets in 2h" with no minutes
+          const hoursOnly = stripped.match(/[Rr]esets?\s+in\s+(\d+)\s*h(?:r|rs|ours?)?/i)
+          if (hoursOnly) {
+            resetMinutes = parseInt(hoursOnly[1]) * 60
+          }
+        }
+        onContextUsage?.(sessionId, pct, resetMinutes)
+      }
+    }
+
     if (promptSentRef.current || !taskInfo?.taskText) return
     // Claude Code uses ❯ (U+276F) as its interactive prompt character
     // Also check for "bypass permissions" which appears in the status bar when ready
     if (data.includes('\u276F') || data.includes('bypass permissions')) {
       promptSentRef.current = true
+      // Notify parent to persist this state
+      onPromptSent?.(sessionId)
       // Build the /swarm prompt with progress file path if available
       let prompt = '/swarm ' + taskInfo.taskText
       if (taskInfo.swarmFile?.relativePath) {
@@ -37,19 +67,20 @@ function TerminalInstance({ sessionId, taskInfo, visible, skipPermissions, onKil
         }, 200)
       }, 1000)
     }
-  }, [taskInfo])
+  }, [taskInfo, sessionId, onPromptSent, onContextUsage])
 
   // When server assigns a session ID, store it so we can reconnect later
   const handleSessionId = useCallback((id) => {
     onUpdateSessionId?.(sessionId, id)
   }, [sessionId, onUpdateSessionId])
 
-  const { termRef, isConnected, sendCommand, sendRaw, reconnect } = useTerminal({
+  const { termRef, isConnected, isMouseTracking, sendCommand, sendRaw, reconnect } = useTerminal({
     onConnected,
     onIncomingData: onTerminalData,
     repo: taskInfo?.repoName,
     sessionId: taskInfo?.ptySessionId || null,
     onSessionId: handleSessionId,
+    swarmFilePath: taskInfo?.swarmFile?.absolutePath || null,
   })
 
   useEffect(() => {
@@ -99,6 +130,11 @@ function TerminalInstance({ sessionId, taskInfo, visible, skipPermissions, onKil
             {confirmKill ? 'Confirm?' : 'Kill'}
           </button>
         )}
+        {isMouseTracking && (
+          <span className="text-[10px] text-muted-foreground/40 italic">
+            Shift+Scroll to browse buffer
+          </span>
+        )}
         <div className="flex items-center gap-1.5">
           <span className={cn(
             'w-1.5 h-1.5 rounded-full',
@@ -119,17 +155,17 @@ function TerminalInstance({ sessionId, taskInfo, visible, skipPermissions, onKil
         )}
       </div>
 
-      {/* Terminal container */}
+      {/* Terminal container — overflow hidden so browser doesn't interfere with xterm scrolling */}
       <div
         ref={termRef}
         className="flex-1 min-h-0"
-        style={{ padding: '4px', isolation: 'isolate' }}
+        style={{ padding: '4px', overflow: 'hidden' }}
       />
     </div>
   )
 }
 
-export default function TerminalPanel({ sessions, activeSessionId, skipPermissions, onKillSession, onUpdateSessionId }) {
+export default function TerminalPanel({ sessions, activeSessionId, skipPermissions, onKillSession, onUpdateSessionId, onPromptSent, onContextUsage }) {
   const hasTerminal = activeSessionId && sessions.has(activeSessionId)
   const [confirmKill, setConfirmKill] = useState(null)
 
@@ -160,6 +196,8 @@ export default function TerminalPanel({ sessions, activeSessionId, skipPermissio
             onKill={() => handleKill(id)}
             confirmKill={confirmKill === id}
             onUpdateSessionId={onUpdateSessionId}
+            onPromptSent={onPromptSent}
+            onContextUsage={onContextUsage}
           />
         </div>
       ))}

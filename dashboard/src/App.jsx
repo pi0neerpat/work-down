@@ -49,7 +49,6 @@ export default function App() {
           let changed = false
           const next = new Map(prev)
           for (const [id, info] of next) {
-            // If the session has a ptySessionId and it's no longer alive, remove it
             if (info.ptySessionId && !liveIds.has(info.ptySessionId)) {
               next.delete(id)
               changed = true
@@ -72,8 +71,36 @@ export default function App() {
     })
   }, [])
 
+  // Callback for when the /swarm prompt has been sent — persist to prevent re-entry
+  const handlePromptSent = useCallback((clientSessionId) => {
+    setAgentTerminals(prev => {
+      const info = prev.get(clientSessionId)
+      if (!info || info.promptSent) return prev
+      const next = new Map(prev)
+      next.set(clientSessionId, { ...info, promptSent: true })
+      return next
+    })
+  }, [])
+
   const [skipPermissions, setSkipPermissions] = useState(true)
   const [rightPanelCollapsed, setRightPanelCollapsed] = useState(false)
+  const [contextUsage, setContextUsage] = useState(null)
+  const [contextResetInfo, setContextResetInfo] = useState(null)
+
+  // Context usage tracking for active Claude Code session
+  const handleContextUsage = useCallback((sessionId, pct, resetMinutes) => {
+    setContextUsage(pct)
+    if (resetMinutes != null) {
+      // Store the absolute time when the session resets, so countdown is accurate
+      setContextResetInfo({ resetsAt: Date.now() + resetMinutes * 60 * 1000 })
+    }
+  }, [])
+
+  // Reset context usage when switching sessions
+  useEffect(() => {
+    setContextUsage(null)
+    setContextResetInfo(null)
+  }, [selection?.id])
 
   // Track previous selection type to reset tab when it changes
   const prevSelectionType = useRef(null)
@@ -100,6 +127,16 @@ export default function App() {
 
   const lastRefresh = overview.lastRefresh || swarm.lastRefresh
   const error = overview.error || swarm.error
+
+  // Reverse lookup: swarm file slug → session ID (for resolving sidebar clicks)
+  const swarmFileToSession = useMemo(() => {
+    const map = {}
+    for (const [sessionId, info] of agentTerminals) {
+      const slug = info.swarmFile?.fileName?.replace(/\.md$/, '')
+      if (slug) map[slug] = sessionId
+    }
+    return map
+  }, [agentTerminals])
 
   // Selection handler — auto-switch to review tab for needs_validation agents
   const handleSelect = useCallback((sel) => {
@@ -137,8 +174,31 @@ export default function App() {
     setActiveTab('terminal')
   }
 
-  // Determine what to show in the review tab based on selection
-  const reviewAgentId = selection?.type === 'swarm' ? selection.id : null
+  // Start a blank worker in a repo — launches Claude Code and lets user type
+  function handleStartWorker(repoName) {
+    const sessionId = 'session-' + Date.now()
+    setAgentTerminals(prev => {
+      const next = new Map(prev)
+      next.set(sessionId, { taskText: '', repoName, swarmFile: null, created: Date.now() })
+      return next
+    })
+    setSelection({ type: 'swarm', id: sessionId })
+    setActiveTab('terminal')
+  }
+
+  // Resolve terminal session ID: selection.id may be a session key or a swarm file slug
+  const activeTerminalSessionId = selection?.type === 'swarm'
+    ? (agentTerminals.has(selection.id) ? selection.id : swarmFileToSession[selection.id] || null)
+    : null
+
+  // Derive swarm file ID from agentTerminals for the selected session
+  // e.g. "2026-03-11-some-task" from swarmFile.fileName "2026-03-11-some-task.md"
+  const swarmFileId = activeTerminalSessionId
+    ? agentTerminals.get(activeTerminalSessionId)?.swarmFile?.fileName?.replace(/\.md$/, '') || null
+    : null
+
+  // Use swarmFileId for API calls (progress, review), fall back to selection.id for sidebar agents
+  const reviewAgentId = swarmFileId || (selection?.type === 'swarm' ? selection.id : null)
 
   // Build contentMap based on selection type
   const contentMap = useMemo(() => {
@@ -147,11 +207,10 @@ export default function App() {
         terminal: (
           <TerminalPanel
             sessions={agentTerminals}
-            activeSessionId={selection?.id}
+            activeSessionId={activeTerminalSessionId}
             skipPermissions={skipPermissions}
             onKillSession={(id) => {
               const info = agentTerminals.get(id)
-              // Kill the server-side PTY session
               if (info?.ptySessionId) {
                 fetch(`/api/sessions/${encodeURIComponent(info.ptySessionId)}`, { method: 'DELETE' }).catch(() => {})
               }
@@ -162,6 +221,8 @@ export default function App() {
               })
             }}
             onUpdateSessionId={handleUpdateSessionId}
+            onPromptSent={handlePromptSent}
+            onContextUsage={handleContextUsage}
           />
         ),
         review: (
@@ -181,10 +242,15 @@ export default function App() {
           onOverviewRefresh={overview.refresh}
           selectedRepo={selection?.type === 'repo' ? selection.id : null}
           onStartTask={handleStartTask}
+          activeWorkers={agentTerminals}
+          onOpenBee={(sessionId) => {
+            setSelection({ type: 'swarm', id: sessionId })
+            setActiveTab('terminal')
+          }}
         />
       ),
     }
-  }, [selectionType, selection?.id, agentTerminals, reviewAgentId, swarm.refresh, overview.refresh, overview.data, skipPermissions, handleUpdateSessionId])
+  }, [selectionType, selection?.id, activeTerminalSessionId, agentTerminals, reviewAgentId, swarm.refresh, overview.refresh, overview.data, skipPermissions, handleUpdateSessionId, handlePromptSent, handleContextUsage])
 
   return (
     <div className="h-screen flex flex-col bg-background">
@@ -195,6 +261,8 @@ export default function App() {
         error={error}
         skipPermissions={skipPermissions}
         onToggleSkipPermissions={() => setSkipPermissions(p => !p)}
+        contextUsage={contextUsage}
+        contextResetInfo={contextResetInfo}
       />
 
       <div className="flex flex-1 overflow-hidden">
@@ -206,6 +274,8 @@ export default function App() {
           onOverviewRefresh={overview.refresh}
           onSwarmRefresh={swarm.refresh}
           activeWorkers={agentTerminals}
+          swarmFileToSession={swarmFileToSession}
+          onStartWorker={handleStartWorker}
         />
 
         {/* Center panel with tabs */}
@@ -222,6 +292,7 @@ export default function App() {
           swarm={swarm.data}
           collapsed={rightPanelCollapsed}
           onToggleCollapse={() => setRightPanelCollapsed(p => !p)}
+          swarmFileId={swarmFileId}
         />
       </div>
 

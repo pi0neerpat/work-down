@@ -1,6 +1,7 @@
 # Swarm Task: Kill agent control from dashboard
 Started: 2026-03-11
 Status: Completed
+Validation: Validated
 
 ## Progress
 - Completed Part 1: parsers.js -- added `writeSwarmKill` function, `agentId` parsing in `parseSwarmFile`, `killed` status in `normalizeStatus`, exported new function

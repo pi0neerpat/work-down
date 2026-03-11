@@ -36,7 +36,7 @@ config.json ─── loadConfig() ───┐
 ## Key Files
 
 - **config.json** -- Repo definitions (names, relative paths, task/activity file names). Has `hubRoot` for absolute resolution.
-- **parsers.js** -- CommonJS module. Exports: `parseTaskFile`, `parseActivityLog`, `getGitInfo`, `parseSwarmFile`, `parseSwarmDir`, `loadConfig`. Zero external dependencies.
+- **parsers.js** -- CommonJS module. Read functions: `parseTaskFile`, `parseActivityLog`, `getGitInfo`, `parseSwarmFile`, `parseSwarmDir`, `loadConfig`. Write functions: `writeTaskDone`, `writeTaskAdd`, `writeTaskMove`, `writeSwarmValidation`, `writeSwarmKill`, `writeSwarmStatus`, `createCheckpoint`, `revertCheckpoint`, `dismissCheckpoint`, `listCheckpoints`. Zero external dependencies.
 - **cli.js** -- Agent-friendly CLI. All output is JSON to stdout, errors as JSON to stderr. Commands: `status`, `tasks [--repo=name]`, `swarm [id]`, `repos`, `activity [--limit=N]`, `config`.
 - **terminal.js** -- Human-friendly ANSI terminal dashboard. Read-only display, no interactivity. Uses box-drawing characters.
 - **todo.md** -- Hub's own task tracker (markdown checkboxes).
@@ -47,9 +47,9 @@ config.json ─── loadConfig() ───┐
 
 Separate Node.js project with its own `package.json` (ESM, `"type": "module"`).
 
-- **server.js** -- Express backend on port 3001. Imports `../parsers.js` via `createRequire`. Serves REST API (`/api/overview`, `/api/swarm`, `/api/swarm/:id`, `/api/config`) and built SPA from `dist/`.
-- **src/** -- React SPA with Tailwind CSS v4. Components: `HeaderBar`, `TaskBoard`, `RepoStatus`, `SwarmPanel`. Uses `usePolling` hook for live data.
-- **vite.config.js** -- Proxies `/api` to `localhost:3001` during dev.
+- **server.js** -- Express backend on port 3001. Imports `../parsers.js` via `createRequire`. Serves REST API (`/api/overview`, `/api/swarm`, `/api/swarm/:id`, `/api/config`, `/api/tasks/*`, `/api/sessions`) and WebSocket terminal server (`/ws/terminal`) with persistent PTY sessions. Serves built SPA from `dist/`.
+- **src/** -- React SPA with Tailwind CSS v4. Components: `HeaderBar`, `Sidebar`, `CenterTabs`, `TaskBoard`, `TerminalPanel`, `ResultsPanel`, `RightPanel`, `SwarmDetail`, `SwarmPanel`, `RepoStatus`, `ActivityTimeline`. Hooks: `usePolling`, `useTerminal`. See `docs/dashboard-architecture.md` for full component tree and data flow.
+- **vite.config.js** -- Proxies `/api` and `/ws` to `localhost:3001` during dev.
 
 ### Clauffice (`clauffice/`)
 
@@ -87,6 +87,16 @@ npm start            # Serve built SPA + API from port 3001
 - **Task format**: Markdown checkboxes (`- [ ]` / `- [x]`) under `##` section headers in `todo.md`.
 - **Activity format**: Date headers (`## YYYY-MM-DD`) with bullet entries in `activity-log.md`.
 - **Swarm file format**: Markdown in `notes/swarm/YYYY-MM-DD-slug.md` with frontmatter-style metadata (`# Swarm Task:`, `Started:`, `Status:`, `Validation:`), then `## Progress`, `## Results`, `## Validation` sections.
+
+## Documentation
+
+Detailed architecture docs live in `docs/`. Read these before making structural changes:
+
+| Doc | What It Covers |
+|-----|----------------|
+| `docs/coding-standards.md` | Style guide, naming, data contracts, theming |
+| `docs/cli-architecture.md` | parsers.js function map, CLI commands, terminal.js structure, data flow, task numbering, known duplication |
+| `docs/dashboard-architecture.md` | Server endpoints, React component tree, hooks, dependencies, session lifecycle, ID mapping (session vs swarm file) |
 
 ## Rules
 

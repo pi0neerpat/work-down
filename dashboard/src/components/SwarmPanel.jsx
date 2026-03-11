@@ -170,7 +170,7 @@ function AgentCard({ agent, index, onSwarmRefresh }) {
         )}>
           <StatusIcon
             size={16}
-            className={cn(st.color, agent.status === 'in_progress' && 'animate-spin')}
+            className={cn(st.color, agent.status === 'in_progress' && 'animate-spin-slow')}
           />
         </div>
 
@@ -391,7 +391,7 @@ export default function SwarmPanel({ swarm, onSwarmRefresh }) {
         </div>
         {hasActive && (
           <span className="relative flex h-1.5 w-1.5">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-40" style={{ background: 'var(--status-active)' }} />
+            <span className="animate-ping-slow absolute inline-flex h-full w-full rounded-full" style={{ background: 'var(--status-active)' }} />
             <span className="relative inline-flex rounded-full h-1.5 w-1.5" style={{ background: 'var(--status-active)' }} />
           </span>
         )}

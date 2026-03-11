@@ -218,7 +218,7 @@ export default function SwarmDetail({ agentId, onSwarmRefresh, onOverviewRefresh
         )}>
           <StatusIcon
             size={20}
-            className={cn(st.color, detail.status === 'in_progress' && 'animate-spin')}
+            className={cn(st.color, detail.status === 'in_progress' && 'animate-spin-slow')}
           />
         </div>
         <div className="flex-1 min-w-0">

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Clock, Cpu, Loader, PanelRightClose, PanelRightOpen } from 'lucide-react'
-import { cn } from '../lib/utils'
+import { cn, timeAgo } from '../lib/utils'
 import { statusConfig } from './SwarmDetail'
 
 const repoColors = {
@@ -23,6 +23,32 @@ function formatRelativeDate(dateStr) {
 
   const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
   return `${months[month - 1]} ${day}`
+}
+
+function formatEntryTime(date) {
+  const now = new Date()
+  const diffMin = Math.round((now - date) / 60000)
+  if (diffMin < 1) return 'just now'
+  if (diffMin < 60) return `${diffMin}m ago`
+  if (date.toDateString() === now.toDateString()) {
+    return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+  }
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+}
+
+function parseProgressEntry(entry) {
+  // [2026-03-11T14:30:15] or [2026-03-11 14:30:15]
+  const isoMatch = entry.match(/^\[(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?Z?)\]\s*(.*)/)
+  if (isoMatch) {
+    const d = new Date(isoMatch[1].replace(' ', 'T'))
+    if (!isNaN(d.getTime())) return { time: formatEntryTime(d), text: isoMatch[2] || entry }
+  }
+  // [14:30] or [14:30:15]
+  const timeMatch = entry.match(/^\[(\d{1,2}:\d{2}(?::\d{2})?)\]\s*(.*)/)
+  if (timeMatch) {
+    return { time: timeMatch[1], text: timeMatch[2] || entry }
+  }
+  return { time: null, text: entry }
 }
 
 function ProgressTimeline({ agentId }) {
@@ -69,37 +95,55 @@ function ProgressTimeline({ agentId }) {
   const st = statusConfig[detail.status] || statusConfig.unknown
 
   return (
-    <div className="relative pl-5">
-      <div
-        className="absolute left-[7px] top-1 bottom-1 w-px"
-        style={{ background: 'rgba(140, 140, 150, 0.05)' }}
-      />
-      {detail.progressEntries.map((entry, i) => {
-        const isLast = i === detail.progressEntries.length - 1
-        return (
-          <div
-            key={i}
-            className="relative flex items-start min-h-[28px] pb-1.5 group"
-          >
+    <div>
+      {/* Started indicator */}
+      {detail.started && (
+        <div className="text-[9px] text-muted-foreground/30 mb-2 px-1" style={{ fontFamily: 'var(--font-mono)' }}>
+          started {timeAgo(detail.started, detail.durationMinutes)}
+        </div>
+      )}
+
+      <div className="relative">
+        {/* Vertical line — centered at left 7.5px */}
+        <div
+          className="absolute left-[7px] top-1 bottom-1 w-px"
+          style={{ background: 'rgba(140, 140, 150, 0.05)' }}
+        />
+        {detail.progressEntries.map((entry, i) => {
+          const isLast = i === detail.progressEntries.length - 1
+          const { time, text } = parseProgressEntry(entry)
+          return (
             <div
-              className="absolute -left-1 top-[3px] w-[7px] h-[7px] rounded-full border-[1.5px] shrink-0 z-10"
-              style={{
-                background: isLast ? st.dotColor : 'var(--background)',
-                borderColor: isLast ? st.dotColor : 'rgba(140, 140, 150, 0.12)',
-              }}
-            />
-            <span className="text-[11px] text-foreground/60 truncate leading-tight pl-3">
-              {entry}
-            </span>
-            <div
-              className="hidden group-hover:block absolute left-4 bottom-full mb-1 z-20 max-w-[280px] px-2 py-1.5 rounded-lg border border-card-border-hover shadow-xl text-[11px] text-foreground whitespace-normal pointer-events-none"
-              style={{ background: 'var(--background-raised)', boxShadow: '0 4px 24px rgba(0,0,0,0.5)' }}
+              key={i}
+              className="relative flex items-start min-h-[28px] pb-1.5 pl-[22px] group"
             >
-              {entry}
+              {/* Dot — centered at left 7.5px (4px + half of 7px) */}
+              <div
+                className="absolute left-[4px] top-[3px] w-[7px] h-[7px] rounded-full border-[1.5px] shrink-0 z-10"
+                style={{
+                  background: isLast ? st.dotColor : 'var(--background)',
+                  borderColor: isLast ? st.dotColor : 'rgba(140, 140, 150, 0.12)',
+                }}
+              />
+              <span className="flex-1 min-w-0 text-[11px] text-foreground/60 truncate leading-tight">
+                {text}
+              </span>
+              {time && (
+                <span className="shrink-0 text-[9px] text-muted-foreground/30 ml-1.5" style={{ fontFamily: 'var(--font-mono)' }}>
+                  {time}
+                </span>
+              )}
+              {/* Hover tooltip for full text */}
+              <div
+                className="hidden group-hover:block absolute left-4 bottom-full mb-1 z-20 max-w-[280px] px-2 py-1.5 rounded-lg border border-card-border-hover shadow-xl text-[11px] text-foreground whitespace-normal pointer-events-none"
+                style={{ background: 'var(--background-raised)', boxShadow: '0 4px 24px rgba(0,0,0,0.5)' }}
+              >
+                {entry}
+              </div>
             </div>
-          </div>
-        )
-      })}
+          )
+        })}
+      </div>
     </div>
   )
 }
@@ -209,10 +253,10 @@ function ActivityFeed({ overview }) {
   )
 }
 
-export default function RightPanel({ selection, overview, swarm, collapsed, onToggleCollapse }) {
+export default function RightPanel({ selection, overview, swarm, collapsed, onToggleCollapse, swarmFileId }) {
   const isSwarmSelected = selection?.type === 'swarm'
   const selectedAgent = isSwarmSelected
-    ? swarm?.agents?.find(a => a.id === selection.id)
+    ? swarm?.agents?.find(a => a.id === (swarmFileId || selection.id))
     : null
 
   // Collapsed state — thin strip with icon
@@ -246,8 +290,35 @@ export default function RightPanel({ selection, overview, swarm, collapsed, onTo
         </button>
       </div>
 
+      {/* Skills section — above progress for swarm agents */}
+      {selectedAgent?.skills?.length > 0 && (
+        <div className="px-3 pt-1 pb-3">
+          <div className="flex items-center gap-2 mb-2 px-1">
+            <Cpu size={11} className="text-muted-foreground/40" />
+            <h3 className="text-[11px] font-medium text-muted-foreground/50">
+              Skills
+            </h3>
+          </div>
+          <div className="flex flex-wrap gap-1.5 px-1">
+            {selectedAgent.skills.map(skill => (
+              <span
+                key={skill}
+                className="text-[10px] font-medium px-2 py-0.5 rounded-full border border-primary/15 bg-primary/5 text-primary/60"
+              >
+                {skill}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Divider between skills and progress/activity */}
+      {selectedAgent?.skills?.length > 0 && isSwarmSelected && (
+        <div className="mx-3 h-px bg-border" />
+      )}
+
       {/* Progress Timeline / Activity section */}
-      <div className="px-3 pb-3">
+      <div className="px-3 pb-3 pt-2">
         <div className="flex items-center gap-2 mb-2 px-1">
           <Clock size={10} className="text-muted-foreground/30" />
           <h3 className="text-[10px] font-medium text-muted-foreground/40 uppercase tracking-wider">
@@ -257,37 +328,12 @@ export default function RightPanel({ selection, overview, swarm, collapsed, onTo
 
         <div className="px-1">
           {isSwarmSelected ? (
-            <ProgressTimeline agentId={selection.id} />
+            <ProgressTimeline agentId={swarmFileId || selection.id} />
           ) : (
             <ActivityFeed overview={overview} />
           )}
         </div>
       </div>
-
-      {/* Skills section */}
-      {selectedAgent?.skills?.length > 0 && (
-        <>
-          <div className="mx-3 h-px bg-border" />
-          <div className="px-3 pt-3 pb-4">
-            <div className="flex items-center gap-2 mb-2 px-1">
-              <Cpu size={11} className="text-muted-foreground/40" />
-              <h3 className="text-[11px] font-medium text-muted-foreground/50">
-                Skills
-              </h3>
-            </div>
-            <div className="flex flex-wrap gap-1.5 px-1">
-              {selectedAgent.skills.map(skill => (
-                <span
-                  key={skill}
-                  className="text-[10px] font-medium px-2 py-0.5 rounded-full border border-primary/15 bg-primary/5 text-primary/60"
-                >
-                  {skill}
-                </span>
-              ))}
-            </div>
-          </div>
-        </>
-      )}
     </aside>
   )
 }

@@ -20,17 +20,19 @@ function parseTaskFile(filePath) {
         sections.push(currentSection);
         continue;
       }
-      const taskMatch = line.match(/^- \[([ x])\]\s+(.+)/);
+      const taskMatch = line.match(/^(?:\d+\.\s+|[-*]\s+)\[([ x])\]\s+(.+)/);
       if (taskMatch) {
         const done = taskMatch[1] === 'x';
         const text = taskMatch[2]
           .replace(/\s*—\s*\*\*DONE.*\*\*/, '')
           .replace(/\s*\(.*?\)\s*$/, '')
           .replace(/\*\*/g, '');
-        if (done) { doneCount++; }
-        else {
+        if (done) {
+          doneCount++;
+          if (currentSection) currentSection.tasks.push({ text, done: true });
+        } else {
           openCount++;
-          if (currentSection) currentSection.tasks.push({ text, done });
+          if (currentSection) currentSection.tasks.push({ text, done: false });
         }
       }
     }
@@ -88,6 +90,7 @@ function normalizeStatus(raw) {
 function parseSwarmFile(filePath) {
   const id = path.basename(filePath, '.md');
   let taskName = '', started = '', status = 'unknown', validation = 'none', agentId = null, skills = [];
+  let originalTask = '';
   const progressEntries = [];
   let results = null;
   let validationNotes = null;
@@ -471,6 +474,61 @@ function writeTaskMove(sourceFile, taskNum, destFile, section) {
   return { moved: true, text: taskText, from: sourceFile, to: destFile };
 }
 
+/**
+ * Update the Status: line in a swarm file.
+ * Returns { success, id, status }.
+ */
+function writeSwarmStatus(filePath, newStatus) {
+  const content = fs.readFileSync(filePath, 'utf8');
+  const lines = content.split('\n');
+  let statusLineIndex = -1;
+
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].match(/^Status:\s/)) {
+      statusLineIndex = i;
+      break;
+    }
+  }
+
+  if (statusLineIndex === -1) {
+    throw new Error('swarm file has no Status: line');
+  }
+
+  const displayMap = {
+    completed: 'Completed',
+    in_progress: 'In progress',
+    failed: 'Failed',
+    killed: 'Killed',
+  };
+  const displayValue = displayMap[newStatus] || newStatus;
+  lines[statusLineIndex] = `Status: ${displayValue}`;
+
+  // When completing, auto-set validation to needs_validation if still 'none'
+  if (newStatus === 'completed') {
+    let validationLineIndex = -1;
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].match(/^Validation:\s/)) {
+        validationLineIndex = i;
+        break;
+      }
+    }
+    if (validationLineIndex !== -1) {
+      const currentVal = lines[validationLineIndex].replace(/^Validation:\s*/, '').trim().toLowerCase().replace(/\s+/g, '_');
+      if (currentVal === 'none' || currentVal === '') {
+        lines[validationLineIndex] = 'Validation: Needs validation';
+      }
+    } else {
+      // No Validation line exists — insert one after Status
+      lines.splice(statusLineIndex + 1, 0, 'Validation: Needs validation');
+    }
+  }
+
+  fs.writeFileSync(filePath, lines.join('\n'), 'utf8');
+
+  const parsed = parseSwarmFile(filePath);
+  return { success: true, id: parsed.id, status: newStatus };
+}
+
 // ── Checkpoint operations ────────────────────────────────
 
 /**
@@ -584,6 +642,66 @@ function listCheckpoints(repoPath) {
   return checkpoints;
 }
 
+/**
+ * Mark a task as done by matching its text content.
+ * Finds the first open task whose text contains the search string (case-insensitive).
+ * Returns { success, text } or throws on error.
+ */
+function writeTaskDoneByText(filePath, searchText) {
+  const content = fs.readFileSync(filePath, 'utf8');
+  const lines = content.split('\n');
+  const needle = searchText.toLowerCase().replace(/\*\*/g, '');
+
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^(\d+\.\s+|[-*]\s+)\[ \]\s+(.+)/);
+    if (m) {
+      const taskText = m[2].replace(/\*\*/g, '').replace(/\s*\(.*?\)\s*$/, '');
+      if (taskText.toLowerCase().includes(needle) || needle.includes(taskText.toLowerCase())) {
+        lines[i] = lines[i].replace('[ ]', '[x]');
+        fs.writeFileSync(filePath, lines.join('\n'), 'utf8');
+        return { success: true, text: taskText };
+      }
+    }
+  }
+
+  throw new Error(`no open task matching "${searchText}" found`);
+}
+
+/**
+ * Edit the text of an open task in a todo.md file.
+ * taskNum is 1-indexed: the Nth open task in the file (across all sections).
+ * Returns { success, taskNum, oldText, newText } or throws on error.
+ */
+function writeTaskEdit(filePath, taskNum, newText) {
+  const content = fs.readFileSync(filePath, 'utf8');
+  const lines = content.split('\n');
+  let openIndex = 0;
+  let targetLine = -1;
+  let oldText = '';
+
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^(\d+\.\s+|[-*]\s+)\[ \]\s+(.+)/);
+    if (m) {
+      openIndex++;
+      if (openIndex === taskNum) {
+        targetLine = i;
+        oldText = m[2].replace(/\*\*/g, '');
+        // Replace the text portion, keeping the prefix (bullet/number + checkbox)
+        const prefix = lines[i].match(/^(\d+\.\s+|[-*]\s+)\[ \]\s+/)[0];
+        lines[i] = prefix + newText;
+        break;
+      }
+    }
+  }
+
+  if (targetLine === -1) {
+    throw new Error(`open task #${taskNum} not found (${openIndex} open tasks exist)`);
+  }
+
+  fs.writeFileSync(filePath, lines.join('\n'), 'utf8');
+  return { success: true, taskNum, oldText, newText };
+}
+
 module.exports = {
   parseTaskFile,
   parseActivityLog,
@@ -592,10 +710,13 @@ module.exports = {
   parseSwarmDir,
   loadConfig,
   writeTaskDone,
+  writeTaskDoneByText,
   writeTaskAdd,
+  writeTaskEdit,
   writeTaskMove,
   writeSwarmValidation,
   writeSwarmKill,
+  writeSwarmStatus,
   createCheckpoint,
   revertCheckpoint,
   dismissCheckpoint,

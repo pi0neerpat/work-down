@@ -20,6 +20,7 @@ export default function JobDetailView({
   onJobsRefresh,
   onOverviewRefresh,
   onStartTask,
+  onResumeJob,
   onRemoveSession,
   showToast,
 }) {
@@ -48,6 +49,8 @@ export default function JobDetailView({
   const jobLabel = taskInfo?.taskText || 'Worker session'
 
   const activeTerminalSessionId = hasTerminal ? jobId : (jobFileToSession?.[jobId] || null)
+  const activeTerminalInfo = activeTerminalSessionId ? agentTerminals.get(activeTerminalSessionId) : null
+  const hasLiveTerminal = Boolean(activeTerminalInfo && activeTerminalInfo.alive !== false)
 
   return (
     <div className="h-full flex flex-col">
@@ -118,9 +121,11 @@ export default function JobDetailView({
           <div className="max-w-[50rem] mx-auto w-full">
             <ResultsPanel
               agentId={reviewAgentId}
+              hasLiveTerminal={hasLiveTerminal}
               onJobsRefresh={onJobsRefresh}
               onOverviewRefresh={onOverviewRefresh}
               onStartTask={onStartTask}
+              onResumeJob={onResumeJob}
               onBack={onBack}
               onRemoveSession={() => onRemoveSession?.(jobId)}
               showToast={showToast}

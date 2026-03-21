@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Activity, CheckCircle, XCircle, AlertCircle, Loader, Clock, Ban, Square } from 'lucide-react'
 import Markdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { cn, timeAgo } from '../lib/utils'
 import { statusConfig, validationConfig } from '../lib/statusConfig'
 import { repoIdentityColors } from '../lib/constants'
@@ -279,7 +280,7 @@ export default function SwarmDetail({ agentId, onJobsRefresh, onOverviewRefresh 
         <div className="mb-5">
           <p className="text-[10px] text-muted-foreground/50 font-medium mb-2">Results</p>
           <div className="rounded-lg border border-card-border bg-card px-4 py-3.5 text-xs text-foreground/70 leading-relaxed">
-            <Markdown components={mdComponents}>{detail.results}</Markdown>
+            <Markdown remarkPlugins={[remarkGfm]} components={mdComponents}>{detail.results}</Markdown>
           </div>
         </div>
       )}
@@ -289,7 +290,7 @@ export default function SwarmDetail({ agentId, onJobsRefresh, onOverviewRefresh 
         <div className="mb-5">
           <p className="text-[10px] text-muted-foreground/50 font-medium mb-2">Validation</p>
           <div className="rounded-lg border border-status-review-border bg-status-review-bg px-4 py-3.5 text-xs text-foreground/70 leading-relaxed">
-            <Markdown components={mdComponents}>{detail.validationNotes}</Markdown>
+            <Markdown remarkPlugins={[remarkGfm]} components={mdComponents}>{detail.validationNotes}</Markdown>
           </div>
         </div>
       )}

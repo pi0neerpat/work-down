@@ -193,7 +193,7 @@ export default function JobsView({
                   return (
                     <button
                       key={worker.key}
-                      onClick={() => onSelectJob?.(worker.id)}
+                      onClick={() => onSelectJob?.(worker.jobId || worker.id)}
                       className="w-full text-left px-4 py-3 rounded-lg border border-card-border bg-card hover:bg-card-hover/40 hover:border-card-border-hover transition-all group animate-fade-up"
                     >
                       <div className="flex items-center gap-3">

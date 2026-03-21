@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Activity, CheckCircle, XCircle, AlertCircle, Loader, ChevronDown, ChevronRight, Cpu, Clock, Ban, Square } from 'lucide-react'
 import Markdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { cn, timeAgo } from '../lib/utils'
 import { statusConfig, validationConfig } from '../lib/statusConfig'
 import { mdComponents } from './mdComponents'
@@ -238,7 +239,7 @@ function AgentCard({ agent, index, onJobsRefresh }) {
             <div>
               <p className="text-[10px] text-muted-foreground/50 font-medium mb-1.5">Results</p>
               <div className="rounded-lg bg-secondary/30 px-3 py-2.5 text-foreground/70 leading-relaxed">
-                <Markdown components={mdComponents}>{detail.results}</Markdown>
+                <Markdown remarkPlugins={[remarkGfm]} components={mdComponents}>{detail.results}</Markdown>
               </div>
             </div>
           )}
@@ -246,7 +247,7 @@ function AgentCard({ agent, index, onJobsRefresh }) {
             <div>
               <p className="text-[10px] text-muted-foreground/50 font-medium mb-1.5">Validation</p>
               <div className="rounded-lg bg-status-review-bg px-3 py-2.5 text-foreground/70 leading-relaxed border border-status-review-border">
-                <Markdown components={mdComponents}>{detail.validationNotes}</Markdown>
+                <Markdown remarkPlugins={[remarkGfm]} components={mdComponents}>{detail.validationNotes}</Markdown>
               </div>
             </div>
           )}

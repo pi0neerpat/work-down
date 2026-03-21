@@ -230,17 +230,29 @@ function TerminalInstance({
 }) {
   const sendCommandRef = useRef(null)
   const sendRawRef = useRef(null)
+  const fitRef = useRef(null)
   const promptSentRef = useRef(taskInfo?.promptSent || false)
+  const resumeSentRef = useRef(false)
 
   const onConnected = useCallback(() => {
+    if (taskInfo?.resumeCommand && !resumeSentRef.current) {
+      resumeSentRef.current = true
+      setTimeout(() => {
+        fitRef.current?.()
+        sendCommandRef.current?.(taskInfo.resumeCommand)
+      }, 500)
+      return
+    }
     if (promptSentRef.current) return
     setTimeout(() => {
+      // Re-fit so PTY has correct dimensions before the command renders
+      fitRef.current?.()
       let flags = skipPermissions ? ' --dangerously-skip-permissions' : ''
       if (taskInfo?.model) flags += ` --model ${taskInfo.model}`
       if (taskInfo?.maxTurns) flags += ` --max-turns ${taskInfo.maxTurns}`
       sendCommandRef.current?.('claude' + flags)
     }, 500)
-  }, [skipPermissions, taskInfo?.model, taskInfo?.maxTurns])
+  }, [skipPermissions, taskInfo?.model, taskInfo?.maxTurns, taskInfo?.resumeCommand])
 
   const onTerminalData = useCallback((data) => {
     const stripped = data.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '')
@@ -297,7 +309,8 @@ function TerminalInstance({
   useEffect(() => {
     sendCommandRef.current = sendCommand
     sendRawRef.current = sendRaw
-  }, [sendCommand, sendRaw])
+    fitRef.current = fit
+  }, [sendCommand, sendRaw, fit])
 
   // Re-fit when this terminal becomes the visible/active one
   useEffect(() => {

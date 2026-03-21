@@ -121,12 +121,15 @@ function parseJobFile(filePath) {
   const id = path.basename(filePath, '.md');
   let taskName = '', started = '', status = 'unknown', validation = 'none', agentId = null, skills = [];
   let originalTask = '', session = null, repo = null;
+  let resumeId = null, resumeCommand = null;
   const progressEntries = [];
   let results = null;
   let validationNotes = null;
+  let rawContent = '';
 
   try {
-    const lines = fs.readFileSync(filePath, 'utf8').split('\n');
+    rawContent = fs.readFileSync(filePath, 'utf8');
+    const lines = rawContent.split('\n');
     let currentSection = null;
     let resultLines = [];
     let validationLines = [];
@@ -156,6 +159,12 @@ function parseJobFile(filePath) {
 
       const sessionMatch = line.match(/^Session:\s*(.+)/);
       if (sessionMatch) { session = sessionMatch[1].trim(); continue; }
+
+      const resumeIdMatch = line.match(/^ResumeId:\s*(.+)/);
+      if (resumeIdMatch) { resumeId = resumeIdMatch[1].trim(); continue; }
+
+      const resumeCommandMatch = line.match(/^ResumeCommand:\s*(.+)/);
+      if (resumeCommandMatch) { resumeCommand = resumeCommandMatch[1].trim(); continue; }
 
       const repoMatch = line.match(/^Repo:\s*(.+)/);
       if (repoMatch) { repo = repoMatch[1].trim(); continue; }
@@ -197,9 +206,9 @@ function parseJobFile(filePath) {
 
   return {
     id, taskName, started, status, validation, agentId, skills,
-    originalTask, session, repo,
+    originalTask, session, resumeId, resumeCommand, repo,
     lastProgress, progressCount, durationMinutes, resultsSummary,
-    progressEntries, results, validationNotes,
+    progressEntries, results, validationNotes, rawContent,
   };
 }
 

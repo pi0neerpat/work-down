@@ -12,7 +12,7 @@ export function useJobMetrics({ jobAgents, jobFileToSession, sessionRecordsForNa
   }, [jobAgents, jobFileToSession, sessionRecordsForNav])
 
   const activeJobCount = useMemo(() => {
-    return allJobs.filter(w => w.status === 'in_progress' && !w.needsReview).length
+    return allJobs.filter(w => w.status === 'in_progress' && !w.needsReview && w.alive !== false).length
   }, [allJobs])
 
   const reviewCount = useMemo(() => {

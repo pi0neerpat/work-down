@@ -41,6 +41,7 @@ function buildSessionEntries(activeWorkers, sessionRecords) {
       initJobId: s.initJobId || null,
       status: s.status || 'in_progress',
       validation: s.validation || 'none',
+      alive: s.alive !== false,
       jobIds: Array.isArray(s.jobIds) ? s.jobIds : [],
     }))
   }
@@ -55,6 +56,7 @@ function buildSessionEntries(activeWorkers, sessionRecords) {
       initJobId: info.jobFile?.fileName?.replace(/\.md$/, '') || null,
       status: 'in_progress',
       validation: 'none',
+      alive: true,
       jobIds: [],
     }))
   }
@@ -66,6 +68,7 @@ function buildWorkerItemsCore(jobAgents, activeWorkers, jobFileToSession, sessio
   const items = []
   const seen = new Set()
   const sessionEntries = buildSessionEntries(activeWorkers, sessionRecords)
+  const liveSessionIds = new Set(sessionEntries.filter(s => s.alive !== false).map(s => s.sessionId))
   const allAgents = jobAgents || []
 
   // Phase 1: session-owned entries.
@@ -90,6 +93,7 @@ function buildWorkerItemsCore(jobAgents, activeWorkers, jobFileToSession, sessio
       validation: session.validation,
       created: session.created,
       jobId: session.jobId || session.initJobId || null,
+      alive: session.alive !== false,
     })
   }
 
@@ -99,6 +103,7 @@ function buildWorkerItemsCore(jobAgents, activeWorkers, jobFileToSession, sessio
 
     const isActive = agent.status === 'in_progress' || agent.validation === 'needs_validation'
     const sessionId = jobFileToSession?.[agent.id]
+    const isLive = Boolean(sessionId && liveSessionIds.has(sessionId))
 
     items.push({
       key: `agent:${agent.id}`,
@@ -112,6 +117,7 @@ function buildWorkerItemsCore(jobAgents, activeWorkers, jobFileToSession, sessio
       created: agent.started,
       durationMinutes: agent.durationMinutes,
       jobId: agent.id,
+      alive: isLive,
       isActive,
     })
   }

@@ -27,6 +27,7 @@ export default function App() {
     markPromptSent,
     startTaskSession,
     startWorkerSession,
+    resumeJobSession,
     removeSession,
     killSession,
   } = useSessionStore()
@@ -85,6 +86,7 @@ export default function App() {
   const handleStartTask = useCallback(async (taskText, repoName, dispatchOpts = {}) => {
     const sessionId = await startTaskSession(taskText, repoName, dispatchOpts)
     openJobDetail(sessionId)
+    return sessionId
   }, [startTaskSession, openJobDetail])
 
   const handleStartWorker = useCallback((repoName) => {
@@ -106,6 +108,13 @@ export default function App() {
   const handleDispatch = useCallback(async ({ repo, taskText, originalTask, baseBranch, model, maxTurns, autoMerge }) => {
     await handleStartTask(taskText, repo, { originalTask, baseBranch, model, maxTurns, autoMerge })
   }, [handleStartTask])
+
+  const handleResumeJob = useCallback(async (jobId) => {
+    const sessionId = await resumeJobSession(jobId)
+    if (!sessionId) return
+    openJobDetail(sessionId)
+    showToast('Job resumed', 'success')
+  }, [resumeJobSession, openJobDetail, showToast])
 
   const searchResults = useSearch(searchQuery, overview.data, jobs.data, agentTerminals)
 
@@ -186,6 +195,7 @@ export default function App() {
               onJobsRefresh={jobs.refresh}
               onOverviewRefresh={overview.refresh}
               onStartTask={handleStartTask}
+              onResumeJob={handleResumeJob}
               onRemoveSession={removeSession}
               showToast={showToast}
             />

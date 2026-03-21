@@ -1,122 +1,17 @@
-import { useState, useEffect, useMemo } from 'react'
-import { CheckCircle, XCircle, Loader, Clock, Square, Activity, ListChecks, FileCode2, Wrench, Lightbulb, GitMerge, Scissors, Network, Trash2, Send } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { CheckCircle, XCircle, Loader, Clock, Square, Activity, ListChecks, GitMerge, Scissors, Network, Trash2, Send, RotateCcw } from 'lucide-react'
 import Markdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { cn, timeAgo } from '../lib/utils'
 import { statusConfig, validationConfig } from '../lib/statusConfig'
 import { repoIdentityColors, MODEL_OPTIONS, FOLLOWUP_TEMPLATES } from '../lib/constants'
 import { mdComponents } from './mdComponents'
 
-function parseStructuredResults(raw) {
-  if (!raw) return null
-  const lines = raw.split('\n')
-
-  const fileEdited = []
-  const changes = []
-  const reasons = []
-
-  let section = null
-
-  for (const line of lines) {
-    const trimmed = line.trim()
-    if (!trimmed) continue
-
-    const headerMatch = trimmed.match(/^##+\s*(.+)$/)
-    if (headerMatch) {
-      const label = headerMatch[1].toLowerCase()
-      if (label.includes('file')) section = 'file'
-      else if (label.includes('change')) section = 'changes'
-      else if (label.includes('reason') || label.includes('why')) section = 'reasons'
-      else section = null
-      continue
-    }
-
-    const fileMatch = trimmed.match(/^files?\s+edited\s*:\s*(.+)$/i) || trimmed.match(/^file\s+edited\s*:\s*(.+)$/i)
-    if (fileMatch) {
-      fileEdited.push(fileMatch[1])
-      continue
-    }
-
-    const reasonMatch = trimmed.match(/^reason\s*:\s*(.+)$/i)
-    if (reasonMatch) {
-      reasons.push(reasonMatch[1])
-      continue
-    }
-
-    if (section === 'file') {
-      fileEdited.push(trimmed.replace(/^[-*]\s*/, ''))
-    } else if (section === 'changes') {
-      changes.push(trimmed.replace(/^[-*]\s*/, ''))
-    } else if (section === 'reasons') {
-      reasons.push(trimmed.replace(/^[-*]\s*/, ''))
-    } else if (/^[-*]\s+/.test(trimmed)) {
-      changes.push(trimmed.replace(/^[-*]\s*/, ''))
-    }
-  }
-
-  if (fileEdited.length === 0 && changes.length === 0 && reasons.length === 0) return null
-  return { fileEdited, changes, reasons }
-}
-
 function ResultsSummary({ text }) {
-  const parsed = useMemo(() => parseStructuredResults(text), [text])
-
-  if (!parsed) {
-    return (
-      <div className="rounded-lg border border-card-border bg-card px-5 py-4 text-sm text-foreground/90 leading-loose">
-        <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-2">Result Summary</p>
-        <Markdown components={mdComponents}>{text}</Markdown>
-      </div>
-    )
-  }
-
   return (
-    <div className="space-y-3">
-      {parsed.fileEdited.length > 0 && (
-        <div className="rounded-lg border border-card-border bg-card px-4 py-3">
-          <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-2 flex items-center gap-1.5">
-            <FileCode2 size={12} />
-            File Edited
-          </p>
-          <div className="space-y-1">
-            {parsed.fileEdited.map((item, i) => (
-              <p key={`${item}-${i}`} className="font-mono text-[12px] text-foreground/90 break-all" style={{ fontFamily: 'var(--font-mono)' }}>
-                {item}
-              </p>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {parsed.changes.length > 0 && (
-        <div className="rounded-lg border border-card-border bg-card px-4 py-3">
-          <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-2 flex items-center gap-1.5">
-            <Wrench size={12} />
-            Changes
-          </p>
-          <ul className="space-y-1 text-[13px] text-foreground/85 leading-relaxed">
-            {parsed.changes.map((item, i) => (
-              <li key={`${item}-${i}`} className="flex items-start gap-2">
-                <span className="mt-1.5 w-1 h-1 rounded-full bg-status-active shrink-0" />
-                <span>{item}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {parsed.reasons.length > 0 && (
-        <div className="rounded-lg border border-card-border bg-card px-4 py-3">
-          <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-2 flex items-center gap-1.5">
-            <Lightbulb size={12} />
-            Reason
-          </p>
-          <div className="text-[13px] text-foreground/85 leading-loose space-y-1">
-            {parsed.reasons.map((item, i) => (
-              <p key={`${item}-${i}`}>{item}</p>
-            ))}
-          </div>
-        </div>
-      )}
+    <div className="rounded-lg border border-card-border bg-card px-5 py-4 text-sm text-foreground/90 leading-loose">
+      <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-2">Result Summary</p>
+      <Markdown remarkPlugins={[remarkGfm]} components={mdComponents}>{text}</Markdown>
     </div>
   )
 }
@@ -220,11 +115,18 @@ function AgentActions({ detail, agentId, onJobsRefresh, onOverviewRefresh, onSta
     }
   }
 
-  async function handleFollowUpDispatch(prompt, model, autoMerge) {
+  async function handleFollowUpDispatch(prompt, model, autoMerge, originalTask = null) {
     if (!detail?.repo) return
     setDispatching(true)
     try {
-      await onStartTask?.(prompt, detail.repo, { model, autoMerge })
+      const sessionId = await onStartTask?.(prompt, detail.repo, {
+        model,
+        autoMerge,
+        originalTask: originalTask || prompt,
+      })
+      if (!sessionId) {
+        throw new Error('Failed to start follow-up worker')
+      }
     } catch (err) {
       showFeedbackMsg(err.message || 'Dispatch failed', true)
     } finally {
@@ -323,8 +225,8 @@ function AgentActions({ detail, agentId, onJobsRefresh, onOverviewRefresh, onSta
         )}
       </div>
 
-      {/* Follow-up dispatch — visible when completed/review */}
-      {(detail.validation === 'needs_validation' || detail.status === 'completed') && (
+      {/* Follow-up dispatch — visible when completed/review/stopped */}
+      {(detail.validation === 'needs_validation' || detail.status === 'completed' || detail.status === 'killed') && (
         <FollowUpChat
           repoName={detail.repo}
           detail={detail}
@@ -344,8 +246,13 @@ function FollowUpChat({ repoName, detail, onDispatch, dispatching }) {
 
   async function handleDispatch() {
     if (!chatPrompt.trim()) return
-    const swarmRef = detail?.id ? `\n\n---\nPrevious job context: notes/jobs/${detail.id}.md` : ''
-    await onDispatch?.(chatPrompt.trim() + swarmRef, chatModel, chatAutoMerge)
+    const basePrompt = chatPrompt.trim()
+    const contextLine = detail?.id ? `Previous job context: notes/jobs/${detail.id}.md` : ''
+    const hasContext = contextLine && basePrompt.includes(contextLine)
+    const promptWithContext = contextLine && !hasContext
+      ? `${basePrompt}\n\n---\n${contextLine}`
+      : basePrompt
+    await onDispatch?.(promptWithContext, chatModel, chatAutoMerge, basePrompt)
     setChatPrompt('')
     setActiveTemplate(null)
   }
@@ -443,7 +350,7 @@ function FollowUpChat({ repoName, detail, onDispatch, dispatching }) {
   )
 }
 
-export default function ResultsPanel({ agentId, onJobsRefresh, onOverviewRefresh, onStartTask, onBack, onRemoveSession, showToast }) {
+export default function ResultsPanel({ agentId, hasLiveTerminal = false, onJobsRefresh, onOverviewRefresh, onStartTask, onResumeJob, onBack, onRemoveSession, showToast }) {
   const [detail, setDetail] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
@@ -585,6 +492,21 @@ export default function ResultsPanel({ agentId, onJobsRefresh, onOverviewRefresh
     }
   }
 
+  async function handleResume() {
+    if (!agentId || !onResumeJob) return
+    setActionLoading(true)
+    try {
+      await onResumeJob(agentId)
+      onJobsRefresh?.()
+      onOverviewRefresh?.()
+      showFeedbackMsg('Job resumed')
+    } catch (err) {
+      showFeedbackMsg(err.message || 'Resume failed', true)
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
   if (!agentId) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -667,20 +589,31 @@ export default function ResultsPanel({ agentId, onJobsRefresh, onOverviewRefresh
           </div>
         </div>
 
-        {detail.status === 'in_progress' && (
-          <button
-            onClick={handleKill}
-            className={cn(
-              'px-3 py-1.5 rounded-md text-xs font-medium transition-all shrink-0',
-              confirmKill
-                ? 'bg-status-failed-bg text-status-failed border border-status-failed-border'
-                : 'text-muted-foreground hover:text-status-failed hover:bg-status-failed-bg border border-transparent hover:border-status-failed-border'
-            )}
-            disabled={killing}
-          >
-            {killing ? <Loader size={12} className="animate-spin-slow" /> : confirmKill ? 'Confirm Stop?' : <span className="flex items-center gap-1.5"><Square size={12} /> Stop</span>}
-          </button>
-        )}
+        <div className="flex items-center gap-2 shrink-0">
+          {!hasLiveTerminal && (
+            <button
+              onClick={handleResume}
+              disabled={actionLoading}
+              className="px-3 py-1.5 rounded-md text-xs font-medium border border-border text-muted-foreground hover:text-foreground hover:bg-card-hover transition-all disabled:opacity-50"
+            >
+              <span className="flex items-center gap-1.5"><RotateCcw size={12} /> Resume</span>
+            </button>
+          )}
+          {detail.status === 'in_progress' && hasLiveTerminal && (
+            <button
+              onClick={handleKill}
+              className={cn(
+                'px-3 py-1.5 rounded-md text-xs font-medium transition-all shrink-0',
+                confirmKill
+                  ? 'bg-status-failed-bg text-status-failed border border-status-failed-border'
+                  : 'text-muted-foreground hover:text-status-failed hover:bg-status-failed-bg border border-transparent hover:border-status-failed-border'
+              )}
+              disabled={killing}
+            >
+              {killing ? <Loader size={12} className="animate-spin-slow" /> : confirmKill ? 'Confirm Stop?' : <span className="flex items-center gap-1.5"><Square size={12} /> Stop</span>}
+            </button>
+          )}
+        </div>
       </div>
 
       {detail.results && (
@@ -690,11 +623,20 @@ export default function ResultsPanel({ agentId, onJobsRefresh, onOverviewRefresh
         </div>
       )}
 
+      {detail.rawContent && (
+        <div className="mb-5">
+          <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-2">Full Job Output</p>
+          <div className="rounded-lg border border-card-border bg-card px-5 py-4 text-sm text-foreground/90 leading-loose">
+            <Markdown remarkPlugins={[remarkGfm]} components={mdComponents}>{detail.rawContent}</Markdown>
+          </div>
+        </div>
+      )}
+
       {detail.validationNotes && (
         <div className="mb-5">
           <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-2">Validation</p>
           <div className="rounded-lg border border-status-review-border bg-status-review-bg px-4 py-3 text-xs text-foreground/80 leading-relaxed">
-            <Markdown components={mdComponents}>{detail.validationNotes}</Markdown>
+            <Markdown remarkPlugins={[remarkGfm]} components={mdComponents}>{detail.validationNotes}</Markdown>
           </div>
         </div>
       )}

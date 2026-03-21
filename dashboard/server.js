@@ -152,10 +152,15 @@ function collectJobAgents(config = getConfig()) {
 
 app.get(['/api/jobs', '/api/swarm'], (req, res) => {
   const allAgents = collectJobAgents()
+  const liveSessionIds = new Set(
+    Array.from(ptySessions.entries())
+      .filter(([, s]) => s && s.alive)
+      .map(([id]) => id)
+  )
 
   let active = 0, completed = 0, failed = 0, needsValidation = 0
   for (const a of allAgents) {
-    if (a.status === 'in_progress') active++
+    if (a.status === 'in_progress' && a.session && liveSessionIds.has(a.session)) active++
     else if (a.status === 'completed') completed++
     else if (a.status === 'failed') failed++
     if (a.validation === 'needs_validation') needsValidation++
@@ -206,11 +211,11 @@ function buildCanonicalSessionState() {
 
   const sessions = []
   for (const [id, s] of ptySessions) {
-    if (!s.alive) continue
-
     const sessionAgents = (agentsBySession.get(id) || []).slice().sort(compareAgentsByStart)
     const initAgent = sessionAgents[0] || null
     const canonicalAgent = sessionAgents.length > 0 ? sessionAgents[sessionAgents.length - 1] : null
+    const shouldExpose = s.alive || (canonicalAgent && canonicalAgent.validation !== 'validated')
+    if (!shouldExpose) continue
 
     if (canonicalAgent?.id) jobFileToSession[canonicalAgent.id] = id
     if (initAgent?.id) jobFileToSession[initAgent.id] = id
@@ -229,6 +234,7 @@ function buildCanonicalSessionState() {
       status: canonicalAgent?.status || initAgent?.status || 'in_progress',
       validation: canonicalAgent?.validation || initAgent?.validation || 'none',
       label: canonicalAgent?.taskName || initAgent?.taskName || 'Manual worker',
+      alive: Boolean(s.alive),
     })
   }
 
@@ -302,13 +308,18 @@ app.post(['/api/jobs/init', '/api/swarm/init'], (req, res) => {
   // Don't overwrite if it already exists (e.g. duplicate click)
   if (!fs.existsSync(filePath)) {
     const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 19)
+    const singleLine = (value) => String(value || '').replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim()
+    const headerTaskText = singleLine(taskText)
+    const headerOriginalTask = singleLine(originalTask || '')
     const lines = [
-      `# Job Task: ${taskText}`,
+      `# Job Task: ${headerTaskText}`,
       `Started: ${timestamp}`,
       `Status: In progress`,
-      `OriginalTask: ${originalTask || taskText}`,
       `Repo: ${repo}`,
     ]
+    if (headerOriginalTask && headerOriginalTask !== headerTaskText) {
+      lines.push(`OriginalTask: ${headerOriginalTask}`)
+    }
     if (sessionId) lines.push(`Session: ${sessionId}`)
     if (model) lines.push(`Model: ${model}`)
     if (maxTurns) lines.push(`MaxTurns: ${maxTurns}`)
@@ -428,7 +439,7 @@ app.post('/api/bugs/add', (req, res) => {
   if (!repoConfig) return res.status(404).json({ error: `repo "${repo}" not found` })
   if (!repoConfig.bugsFile) return res.status(400).json({ error: `repo "${repo}" has no bugsFile` })
   try {
-    const result = writeTaskAdd(path.join(repoConfig.resolvedPath, repoConfig.bugsFile), text, section || null)
+    const result = writeTaskAdd(path.join(repoConfig.resolvedPath, repoConfig.bugsFile), text, section || 'Bug')
     invalidateGitInfoCache(repoConfig.resolvedPath)
     res.json({ ...result, repo })
   } catch (err) {
@@ -485,6 +496,96 @@ function findJobFileById(id, config = getConfig()) {
   return null
 }
 
+function upsertHeaderLine(filePath, key, value) {
+  const content = fs.readFileSync(filePath, 'utf8')
+  const lines = content.split('\n')
+  const prefix = `${key}:`
+  const idx = lines.findIndex(line => line.startsWith(prefix))
+  const nextLine = `${prefix} ${value}`
+  if (idx >= 0) {
+    lines[idx] = nextLine
+  } else {
+    const statusIdx = lines.findIndex(line => line.startsWith('Status:'))
+    if (statusIdx >= 0) lines.splice(statusIdx + 1, 0, nextLine)
+    else lines.splice(1, 0, nextLine)
+  }
+  fs.writeFileSync(filePath, lines.join('\n'), 'utf8')
+}
+
+function extractResumeId(resumeCommand) {
+  if (!resumeCommand) return null
+  const match = String(resumeCommand).match(/(?:resume|--resume)\s+([A-Za-z0-9._:-]+)/i)
+  return match ? match[1] : null
+}
+
+app.post(['/api/jobs/:id/resume', '/api/swarm/:id/resume'], (req, res) => {
+  const found = findJobFileById(req.params.id)
+  if (!found) {
+    return res.status(404).json({ error: `Job "${req.params.id}" not found` })
+  }
+
+  try {
+    const detail = parseJobFile(found.filePath)
+    const sessionId = detail.session || null
+    if (!sessionId) {
+      return res.status(409).json({
+        error: 'This job has no tracked terminal session to resume.',
+      })
+    }
+    const resumeCommand = detail.resumeCommand || (detail.resumeId ? `claude resume ${detail.resumeId}` : null)
+    if (!resumeCommand) {
+      return res.status(409).json({
+        error: 'No resume command is recorded for this job yet.',
+      })
+    }
+
+    const existingSession = ptySessions.get(sessionId)
+    if (existingSession?.alive) {
+      return res.status(409).json({
+        error: 'This terminal session is already active.',
+      })
+    }
+
+    // Reopen the terminal session using the same Session: id so job mappings stay stable.
+    // Carry forward prior scrollback so users can still inspect earlier output.
+    const priorScrollback = existingSession?.scrollback || ''
+    if (existingSession) {
+      ptySessions.delete(sessionId)
+    }
+
+    const cwd = found.repo?.resolvedPath || HUB_DIR
+    createPtySession(sessionId, cwd, found.repo?.name || null, found.filePath, priorScrollback)
+
+    writeJobStatus(found.filePath, 'in_progress')
+    writeJobValidation(found.filePath, 'none', null)
+
+    const fileName = path.basename(found.filePath)
+    const relativePath = path.relative(found.repo.resolvedPath, found.filePath).replaceAll(path.sep, '/')
+
+    invalidateGitInfoCache(found.repo.resolvedPath)
+    emitJobsChanged({ repo: found.repo.name, id: req.params.id, reason: 'resumed' })
+
+    return res.json({
+      ok: true,
+      id: req.params.id,
+      repo: found.repo.name,
+      sessionId,
+      resumeCommand,
+      resumeId: extractResumeId(resumeCommand),
+      taskText: detail.taskName || detail.originalTask || req.params.id,
+      status: 'in_progress',
+      validation: 'none',
+      jobFile: {
+        fileName,
+        relativePath,
+        absolutePath: found.filePath,
+      },
+    })
+  } catch (err) {
+    return res.status(400).json({ error: err.message })
+  }
+})
+
 app.post(['/api/jobs/:id/validate', '/api/swarm/:id/validate'], (req, res) => {
   const { notes } = req.body || {}
   const found = findJobFileById(req.params.id)
@@ -492,7 +593,14 @@ app.post(['/api/jobs/:id/validate', '/api/swarm/:id/validate'], (req, res) => {
     return res.status(404).json({ error: `Job "${req.params.id}" not found` })
   }
   try {
+    const detail = parseJobFile(found.filePath)
     const result = writeJobValidation(found.filePath, 'validated', notes || null)
+    // On validate, fully close and remove the terminal session for this job.
+    if (detail.session && ptySessions.has(detail.session)) {
+      const s = ptySessions.get(detail.session)
+      try { s?.shell?.kill() } catch {}
+      ptySessions.delete(detail.session)
+    }
     invalidateGitInfoCache(found.repo.resolvedPath)
     emitJobsChanged({ repo: found.repo.name, id: req.params.id, reason: 'validated' })
     return res.json(result)
@@ -525,7 +633,14 @@ app.post(['/api/jobs/:id/kill', '/api/swarm/:id/kill'], (req, res) => {
     return res.status(404).json({ error: `Job "${req.params.id}" not found` })
   }
   try {
+    const detail = parseJobFile(found.filePath)
     const result = writeJobKill(found.filePath)
+    // Terminate the underlying shell if still running, but keep session record
+    // so scrollback remains viewable in the dashboard.
+    if (detail.session && ptySessions.has(detail.session)) {
+      const s = ptySessions.get(detail.session)
+      try { s?.shell?.kill() } catch {}
+    }
     invalidateGitInfoCache(found.repo.resolvedPath)
     emitJobsChanged({ repo: found.repo.name, id: req.params.id, reason: 'killed' })
     return res.json(result)
@@ -767,7 +882,7 @@ function collectEventStores({ scope = 'all', repo = null, sessionId = null } = {
   return stores
 }
 
-function createPtySession(sessionId, cwd, repoName, jobFilePath) {
+function createPtySession(sessionId, cwd, repoName, jobFilePath, initialScrollback = '') {
   const shell = pty.spawn('/bin/zsh', ['--login'], {
     name: 'xterm-256color',
     cols: 80,
@@ -781,10 +896,12 @@ function createPtySession(sessionId, cwd, repoName, jobFilePath) {
     repo: repoName || null,
     cwd,
     created: Date.now(),
-    scrollback: '',
+    scrollback: initialScrollback || '',
     alive: true,
     ws: null, // current attached WebSocket
     jobFilePath: jobFilePath || null,
+    resumeCommand: null,
+    resumeId: null,
     eventStore: createSessionEventStore({
       sessionId,
       repo: repoName || null,
@@ -792,7 +909,62 @@ function createPtySession(sessionId, cwd, repoName, jobFilePath) {
     }),
   }
 
+  const finalizeSession = (reason = 'unknown') => {
+    if (!session.alive) return
+    session.alive = false
+    // Ensure job file is in a reviewable state whenever the PTY/session ends.
+    if (session.jobFilePath) {
+      try {
+        if (fs.existsSync(session.jobFilePath)) {
+          const agent = parseJobFile(session.jobFilePath)
+          if (agent.status === 'in_progress') {
+            writeJobStatus(session.jobFilePath, 'completed')
+            if (session.repo) {
+              const repoConfig = findRepoConfig(session.repo)
+              invalidateGitInfoCache(repoConfig?.resolvedPath)
+            }
+            emitJobsChanged({ repo: session.repo, id: agent.id, reason: `${reason}_completed` })
+            console.log(`Session end (${reason}): marked job file as completed: ${session.jobFilePath}`)
+          } else if (agent.status === 'completed' && (!agent.validation || agent.validation === 'none')) {
+            writeJobValidation(session.jobFilePath, 'needs_validation', null)
+            if (session.repo) {
+              const repoConfig = findRepoConfig(session.repo)
+              invalidateGitInfoCache(repoConfig?.resolvedPath)
+            }
+            emitJobsChanged({ repo: session.repo, id: agent.id, reason: `${reason}_needs_validation` })
+            console.log(`Session end (${reason}): added needs_validation to completed job file: ${session.jobFilePath}`)
+          }
+        }
+      } catch (err) {
+        console.error(`Failed to update job status on session end (${reason}):`, err.message)
+      }
+    }
+    if (session.ws) {
+      try { session.ws.close() } catch {}
+    }
+  }
+  session.finalize = finalizeSession
+
   shell.onData((data) => {
+    const stripped = stripAnsi(String(data || ''))
+    // Capture resume command emitted by Claude so the job can be resumed later.
+    const cmdMatch = stripped.match(/(claude(?:\s+code)?\s+(?:resume|--resume)\s+[A-Za-z0-9._:-]+)/i)
+    if (cmdMatch) {
+      const nextResumeCommand = cmdMatch[1].trim()
+      if (nextResumeCommand && nextResumeCommand !== session.resumeCommand) {
+        session.resumeCommand = nextResumeCommand
+        session.resumeId = extractResumeId(nextResumeCommand)
+        if (session.jobFilePath && fs.existsSync(session.jobFilePath)) {
+          try {
+            upsertHeaderLine(session.jobFilePath, 'ResumeCommand', session.resumeCommand)
+            if (session.resumeId) upsertHeaderLine(session.jobFilePath, 'ResumeId', session.resumeId)
+          } catch (err) {
+            console.error('Failed to persist resume metadata:', err.message)
+          }
+        }
+      }
+    }
+
     appendChunkToEventStore(session.eventStore, data)
     // Buffer output for reconnect
     session.scrollback += data
@@ -806,40 +978,7 @@ function createPtySession(sessionId, cwd, repoName, jobFilePath) {
   })
 
   shell.onExit(() => {
-    session.alive = false
-    // Ensure job file is in a reviewable state when the PTY exits
-    if (session.jobFilePath) {
-      try {
-        if (fs.existsSync(session.jobFilePath)) {
-          const agent = parseJobFile(session.jobFilePath)
-          if (agent.status === 'in_progress') {
-            // Agent didn't write its own status — mark completed + needs_validation
-            writeJobStatus(session.jobFilePath, 'completed')
-            if (session.repo) {
-              const repoConfig = findRepoConfig(session.repo)
-              invalidateGitInfoCache(repoConfig?.resolvedPath)
-            }
-            emitJobsChanged({ repo: session.repo, id: agent.id, reason: 'pty_exit_completed' })
-            console.log(`PTY exit: marked job file as completed: ${session.jobFilePath}`)
-          } else if (agent.status === 'completed' && (!agent.validation || agent.validation === 'none')) {
-            // Agent wrote Status: Complete directly without setting Validation —
-            // add needs_validation so the job lands in review, not the completed bucket
-            writeJobValidation(session.jobFilePath, 'needs_validation', null)
-            if (session.repo) {
-              const repoConfig = findRepoConfig(session.repo)
-              invalidateGitInfoCache(repoConfig?.resolvedPath)
-            }
-            emitJobsChanged({ repo: session.repo, id: agent.id, reason: 'pty_exit_needs_validation' })
-            console.log(`PTY exit: added needs_validation to completed job file: ${session.jobFilePath}`)
-          }
-        }
-      } catch (err) {
-        console.error(`Failed to update swarm status on PTY exit:`, err.message)
-      }
-    }
-    if (session.ws) {
-      try { session.ws.close() } catch {}
-    }
+    finalizeSession('pty_exit')
     // Don't delete session — keep scrollback and event data for review.
     // Dead sessions have alive=false and can be cleaned up explicitly.
   })
@@ -958,10 +1097,6 @@ wss.on('connection', (ws, req) => {
   // Try to reattach to existing session
   if (sessionId && ptySessions.has(sessionId)) {
     session = ptySessions.get(sessionId)
-    if (!session.alive) {
-      ptySessions.delete(sessionId)
-      session = null
-    }
   }
 
   if (session) {
@@ -1019,7 +1154,23 @@ wss.on('connection', (ws, req) => {
     if (str.trim()) {
       appendChunkToEventStore(session.eventStore, `\nUSER> ${stripAnsi(str)}\n`)
     }
-    try { session.shell.write(str) } catch { /* PTY exited */ }
+    if (!session.alive) {
+      // Dead sessions are retained for scrollback/review. Ignore input.
+      return
+    }
+    try {
+      session.shell.write(str)
+    } catch (err) {
+      // Some PTY failures surface as write-time errors (e.g. "Object has been destroyed")
+      // without a clean onExit callback. Finalize so jobs don't stay in Active forever.
+      console.error(`Session write failed (${session?.eventStore?.sessionId || 'unknown'}):`, err?.message || err)
+      if (typeof session?.finalize === 'function') {
+        session.finalize('write_error')
+      } else {
+        session.alive = false
+      }
+      try { ws.close() } catch {}
+    }
   })
 
   ws.on('close', () => {

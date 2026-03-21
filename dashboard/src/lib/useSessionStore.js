@@ -33,6 +33,7 @@ export function useSessionStore() {
           jobFile: fileName ? { ...(existing.jobFile || {}), fileName } : (existing.jobFile || null),
           created: s.created || existing.created || Date.now(),
           ptySessionId: s.id,
+          alive: s.alive !== false,
           promptSent: existing.promptSent ?? true,
         }
         if (!shallowStableEqual(existing, nextInfo)) {
@@ -103,6 +104,7 @@ export function useSessionStore() {
         repoName,
         jobFile,
         created: Date.now(),
+        alive: true,
         model: dispatchOpts.model || null,
         maxTurns: dispatchOpts.maxTurns || null,
       })
@@ -116,9 +118,38 @@ export function useSessionStore() {
     const sessionId = 'session-' + Date.now()
     setAgentTerminals(prev => {
       const next = new Map(prev)
-      next.set(sessionId, { taskText: '', repoName, jobFile: null, created: Date.now() })
+      next.set(sessionId, { taskText: '', repoName, jobFile: null, created: Date.now(), alive: true })
       return next
     })
+    return sessionId
+  }, [])
+
+  const resumeJobSession = useCallback(async (jobId) => {
+    if (!jobId) return null
+    const res = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/resume`, { method: 'POST' })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.error || `Resume failed: ${res.status}`)
+    }
+    const data = await res.json()
+    const sessionId = data.sessionId || ('session-' + Date.now())
+
+    setAgentTerminals(prev => {
+      const next = new Map(prev)
+      next.set(sessionId, {
+        taskText: data.taskText || '',
+        repoName: data.repo || '',
+        jobFile: data.jobFile || null,
+        created: Date.now(),
+        ptySessionId: sessionId,
+        alive: true,
+        promptSent: true,
+        resumeCommand: data.resumeCommand || null,
+        resumeId: data.resumeId || null,
+      })
+      return next
+    })
+
     return sessionId
   }, [])
 
@@ -182,6 +213,7 @@ export function useSessionStore() {
     markPromptSent,
     startTaskSession,
     startWorkerSession,
+    resumeJobSession,
     removeSession,
     killSession,
   }

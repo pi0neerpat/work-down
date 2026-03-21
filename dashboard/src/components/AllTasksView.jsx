@@ -34,7 +34,7 @@ function deriveStatus(task, repoName, agentTerminals, jobAgents) {
     }
   }
 
-  // Check for swarm agent needing review
+  // Check for job needing review
   if (jobAgents) {
     for (const agent of jobAgents) {
       if (agent.repo === repoName && agent.validation === 'needs_validation') {
@@ -115,7 +115,12 @@ export default function AllTasksView({
       const repoTasks = repo.tasks?.allTasks || []
       for (const task of repoTasks) {
         const { status, jobId } = deriveStatus(task, repo.name, agentTerminals, jobAgents)
-        tasks.push({ ...task, repoName: repo.name, status, jobId })
+        tasks.push({ ...task, repoName: repo.name, status, jobId, isBug: false })
+      }
+      const repoBugs = repo.bugs?.allTasks || []
+      for (const task of repoBugs) {
+        const { status, jobId } = deriveStatus(task, repo.name, agentTerminals, jobAgents)
+        tasks.push({ ...task, repoName: repo.name, status, jobId, isBug: true })
       }
     }
     // Sort: open/in_progress first, then review, then done
@@ -130,7 +135,7 @@ export default function AllTasksView({
       if (selectedTimeframes.size > 0 && !selectedTimeframes.has(t.timeframe)) return false
       if (selectedStatuses.size > 0 && !selectedStatuses.has(t.status)) return false
       if (selectedRepos.size > 0 && !selectedRepos.has(t.repoName)) return false
-      if (bugFilter && !t.section?.toLowerCase().includes('bug')) return false
+      if (bugFilter && !t.isBug) return false
       return true
     })
   }, [allTasks, selectedTimeframes, selectedStatuses, selectedRepos, bugFilter])
@@ -138,7 +143,7 @@ export default function AllTasksView({
   async function handleToggleDone(task) {
     try {
       if (task.done) return // Can't undo done for now
-      await fetch('/api/tasks/done-by-text', {
+      await fetch(task.isBug ? '/api/bugs/done-by-text' : '/api/tasks/done-by-text', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ repo: task.repoName, text: task.text }),
@@ -164,7 +169,7 @@ export default function AllTasksView({
       return
     }
     try {
-      await fetch('/api/tasks/edit', {
+      await fetch(task.isBug ? '/api/bugs/edit' : '/api/tasks/edit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ repo: task.repoName, taskNum: task.openTaskNum, newText: trimmed }),
@@ -209,7 +214,7 @@ export default function AllTasksView({
     if (!newTaskText.trim() || !newTaskRepo) return
     setIsAdding(true)
     try {
-      await fetch('/api/tasks/add', {
+      await fetch(newTaskIsBug ? '/api/bugs/add' : '/api/tasks/add', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -436,7 +441,7 @@ export default function AllTasksView({
                     </p>
                   )}
                   <div className="flex items-center gap-1.5 mt-0.5">
-                    {task.section?.toLowerCase().includes('bug') ? (
+                    {task.isBug ? (
                       <span
                         className="text-[9px] px-1.5 py-0.5 rounded-full border font-medium"
                         style={{ borderColor: `${BUG_COLOR}50`, backgroundColor: `${BUG_COLOR}12`, color: BUG_COLOR }}

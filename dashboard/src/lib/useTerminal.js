@@ -55,6 +55,11 @@ export function useTerminal({ onConnected, onIncomingData, onJobsChanged, repo, 
 
     ws.onopen = () => {
       setIsConnected(true)
+      // Fit terminal to actual container size before sending the initial resize.
+      // Without this, cols/rows may still be xterm defaults (80×24) because the
+      // requestAnimationFrame fit hasn't fired yet, causing the PTY to start at
+      // the wrong size and the first command to render with garbled line wrapping.
+      try { fitAddonRef.current?.fit() } catch {}
       // Send initial resize
       if (terminalRef.current) {
         const { cols, rows } = terminalRef.current

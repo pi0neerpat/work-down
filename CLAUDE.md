@@ -61,8 +61,9 @@ Separate Node.js project with its own `package.json` (ESM, `"type": "module"`).
 
 Two skills are included:
 
-- **`/hub`** -- Cross-repo task view and work prioritization. Runs `cli.js status` and presents a unified view.
-- **`/jobs`** -- Launch parallel sub-agents from a task list. Each agent writes progress to `notes/jobs/`.
+- **`/workdown`** -- Cross-repo task view and work prioritization. Runs `cli.js status` and presents a unified view.
+- **`/done`** -- Mark a task done and log activity. Updates `todo.md` and `activity-log.md` for manual sessions.
+- **`/add-repo`** -- Connect a new repo to Work.Down.
 
 Two hooks are included:
 

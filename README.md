@@ -24,7 +24,7 @@ The full list. Nothing is installed globally.
 |------|------|
 | Dashboard (React + Express) | `dashboard/` |
 | CLI + parsers | `cli.js`, `parsers.js` |
-| Claude skills (`/hub`, `/jobs`, `/add-repo`, `/done`) | `.claude/skills/` |
+| Claude skills (`/workdown`, `/add-repo`, `/done`) | `.claude/skills/` |
 | `protect-env.js` hook | `.claude/hooks/` |
 
 **In each repo you connect (via `/add-repo`):**
@@ -151,12 +151,11 @@ All output is JSON — designed for scripting and agent consumption.
 
 ## Claude skills
 
-Four skills are active when Claude Code is opened in the Work.Down directory:
+Three skills are active when Claude Code is opened in the Work.Down directory:
 
 | Skill | Invoke | What it does |
 |-------|--------|--------------|
-| `/hub` | `/hub` or "what should I work on?" | Cross-repo task view and work recommendations |
-| `/jobs` | `/jobs` + task list | Launch multiple Claude sub-agents in parallel |
+| `/workdown` | `/workdown` or "what should I work on?" | Cross-repo task view and work recommendations |
 | `/add-repo` | `/add-repo` | Connect a new repo to Work.Down |
 | `/done` | `/done` or "we're done" | Mark a task done and log activity manually |
 

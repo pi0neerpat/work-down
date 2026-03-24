@@ -1,86 +1,79 @@
-# Claude Agent Hub
+# Work.Down
 
-> **Experimental / testing grounds.** This is not a finished product — it's a working prototype used to coordinate multi-repo AI agent workflows. Expect rough edges.
+> **Experimental / testing grounds.** This is a working prototype, not a finished product. Expect rough edges.
 
-A coordination hub for Claude Code agent workflows across multiple repos. Gives you a single place to track tasks, dispatch agents, and monitor progress — without leaving your terminal or a lightweight web dashboard.
+A coordination hub for Claude Code workflows across multiple repos. Track tasks, dispatch AI agents, and monitor job progress — all backed by plain markdown files. No database, no external services.
 
-## What It Does
+## What it does
 
-- **Aggregates tasks and activity** from all your repos into one view
-- **Dispatches Claude Code agents** to work on tasks, with progress tracked in markdown files
-- **Web dashboard** for managing jobs, viewing terminal output, and reviewing agent work
-- **CLI** for scripting and agent-to-agent queries
+- **Task dashboard** — see open tasks and activity across all your repos in one place
+- **Agent dispatch** — start Claude Code sessions from the dashboard, track progress live
+- **Job history** — every agent run is logged to a markdown file in `notes/jobs/`
+- **CLI** — JSON output for scripting and agent-to-agent queries
 
-The "database" is plain markdown files (`todo.md`, `activity-log.md`, `notes/jobs/*.md`) — no external services, no database.
+## What gets installed where
 
-## Screenshots
+This is the full list. Nothing is installed globally or outside the directories you explicitly connect.
 
-> _(Coming soon)_
+| What | Where | Why |
+|------|-------|-----|
+| Dashboard (React + Express) | `hub/dashboard/` | The web UI and API server |
+| CLI + parsers | `hub/` | `node cli.js` commands — zero dependencies |
+| Claude skills | `hub/.claude/skills/` | `/hub`, `/jobs`, `/add-repo` — only active in this directory |
+| Claude hooks | `hub/.claude/hooks/` | `protect-env.js` — only active in this directory |
+| `hub-stop.js` hook | `<each connected repo>/.claude/hooks/` | Signals the dashboard when a dispatched job finishes |
+| `settings.json` entry | `<each connected repo>/.claude/settings.json` | Registers the hook — merged with any existing config |
 
-## Quick Start
+The `hub-stop.js` hook is a no-op unless the hub dashboard is running and dispatched that session. It won't interfere with normal Claude usage in your repos.
 
-**1. Configure your repos**
+---
 
-Copy `config.example.json` to `config.json` and point it at your repos:
+## Setup
 
-```json
-{
-  "repos": [
-    { "name": "app", "path": "../my-app", "taskFile": "todo.md", "activityFile": "activity-log.md" },
-    { "name": "hub", "path": ".", "taskFile": "todo.md", "activityFile": "activity-log.md" }
-  ],
-  "hubRoot": "."
-}
-```
-
-Each repo needs a `todo.md` with markdown checkboxes (`- [ ] task`) and an `activity-log.md` with date headers (`## YYYY-MM-DD`).
-
-**2. Try the CLI (no install needed)**
+### 1. Clone and install
 
 ```bash
-node cli.js status        # Overview of all repos
-node cli.js tasks         # All open tasks
-node cli.js tasks --repo=app
-node cli.js swarm         # Active agent jobs
+git clone https://github.com/your-org/workdown hub
+cd hub/dashboard && yarn install && cd ..
 ```
 
-**3. Run the terminal dashboard**
+> **Node.js version note:** `node-pty` requires Node 18 or 20. On Node 24+ the `postinstall` script rebuilds it from source automatically — this takes a minute on first install.
+
+### 2. Open in Claude Code
 
 ```bash
-node terminal.js
+cd hub
+claude .
 ```
 
-**4. Run the web dashboard**
+### 3. Add your repos
+
+In the Claude Code conversation, run:
+
+```
+/add-repo
+```
+
+Claude will ask for the repo name, path, and optional scripts, then:
+- Add it to `config.json`
+- Create `todo.md`, `bugs.md`, and `activity-log.md` in that repo if they don't exist
+- Install the `hub-stop.js` hook in that repo's `.claude/` directory
+
+Repeat for each repo you want to track.
+
+### 4. Start the dashboard
 
 ```bash
-cd dashboard && yarn install
-yarn dev    # http://localhost:5173
+cd dashboard && yarn dev
 ```
 
-## Architecture
+Open [http://localhost:5173](http://localhost:5173).
 
-```
-config.json ─── loadConfig() ───┐
-                                │
-                          parsers.js (shared)
-                           │    │    │
-                    ┌──────┘    │    └──────┐
-                    v           v           v
-                 cli.js    terminal.js   dashboard/server.js
-              (JSON out)   (ANSI out)    (Express REST API)
-                                              │
-                                         dashboard/src/
-                                        (React + Tailwind SPA)
-```
+---
 
-- **`parsers.js`** — shared data layer, zero external dependencies
-- **`cli.js`** — JSON CLI for agent and script consumption
-- **`terminal.js`** — ANSI read-only dashboard
-- **`dashboard/`** — React SPA + Express API, WebSocket terminal with PTY
+## File formats
 
-## Task & Activity Format
-
-Tasks live in `todo.md` in each repo:
+### Tasks — `todo.md`
 
 ```markdown
 ## Open
@@ -93,100 +86,76 @@ Tasks live in `todo.md` in each repo:
 - [x] Set up CI pipeline
 ```
 
-Activity lives in `activity-log.md`:
+### Bugs — `bugs.md`
 
 ```markdown
-# Activity Log
+## Open
+
+- [ ] Login fails on Safari
+
+## Fixed
+
+- [x] 500 error on empty form submit
+```
+
+### Activity — `activity-log.md`
+
+```markdown
+# My Repo — Activity Log
 
 **Current stage:** MVP
 
 ## 2026-03-24
 
-- **Added auth module** — JWT-based authentication with refresh tokens
+- **Added auth module** — JWT-based auth with refresh tokens
 ```
 
-## Agent Job Format
+---
 
-When the dashboard dispatches an agent, it creates a progress file at `notes/jobs/YYYY-MM-DD-slug.md`:
+## CLI reference
 
-```markdown
-# Job Task: Add input validation to the API
-Started: 2026-03-24 10:00:00
-Status: In progress
-Repo: app
-Session: session-abc123
-
-## Progress
-- [2026-03-24 10:00:00] Task initiated from dashboard
-- [2026-03-24 10:01:30] Reading existing validation patterns...
-
-## Results
-...
-
-## Validation
-...
+```bash
+node cli.js status              # Overview of all repos
+node cli.js tasks               # All open tasks across repos
+node cli.js tasks --repo=app    # Tasks for one repo
+node cli.js swarm               # Active and recent agent jobs
+node cli.js repos               # List configured repos
+node cli.js config              # Dump full resolved config
 ```
 
-The dashboard polls these files to show live progress.
+All output is JSON — designed for scripting and agent consumption.
 
-## Claude Skills
+---
 
-Two Claude Code skills are included in `.claude/skills/`:
+## Claude skills
 
-- **`/hub`** — Ask Claude for a cross-repo task view and work recommendations
-- **`/jobs`** — Dispatch multiple Claude sub-agents in parallel from a task list
+Three skills are included and active when Claude Code is opened in this directory:
 
-Two hooks are included in `.claude/hooks/`:
+| Skill | Invoke | What it does |
+|-------|--------|--------------|
+| `/hub` | `/hub` or ask "what should I work on?" | Cross-repo task view and work recommendations |
+| `/jobs` | `/jobs` followed by a task list | Launch multiple Claude sub-agents in parallel |
+| `/add-repo` | `/add-repo` | Add a new repo to the hub (see Setup above) |
 
-- **`protect-env.js`** — Blocks Claude from accidentally reading `.env` files
-- **`hub-stop.js`** — Signals the dashboard when a dispatched session ends
-
-For a fuller Claude Code skill suite, see [Clauffice](https://github.com/pi0neerpat/clauffice).
+---
 
 ## Requirements
 
-- Node.js 18+
-- [Claude Code](https://claude.ai/code) (for agent dispatch features)
-- Yarn (for dashboard): `corepack enable && corepack prepare yarn@stable --activate`
+- Node.js 18+ (20 recommended)
+- [Claude Code](https://claude.ai/code)
+- Yarn: `corepack enable && corepack prepare yarn@stable --activate`
 
-> **Note on Node.js version:** `node-pty` (used for terminal PTY) requires rebuilding from source on Node v24+. The dashboard's `postinstall` script handles this automatically via `npx node-gyp rebuild`.
-
-## Project Structure
-
-```
-hub/
-├── cli.js              # JSON CLI
-├── terminal.js         # ANSI terminal dashboard
-├── parsers.js          # Shared data layer
-├── config.json         # Your repo configuration
-├── config.example.json # Example configuration
-├── todo.md             # Hub's own tasks
-├── activity-log.md     # Hub's own activity log
-├── dashboard/          # Web dashboard (React + Express)
-│   ├── server.js       # Express API + WebSocket terminal
-│   ├── eventPipeline.js# Terminal event capture
-│   └── src/            # React SPA
-├── docs/               # Architecture docs
-│   ├── cli-architecture.md
-│   ├── dashboard-architecture.md
-│   └── coding-standards.md
-├── notes/jobs/         # Agent job progress files (gitignored)
-└── .claude/            # Claude Code hooks and skills
-    ├── settings.json
-    ├── hooks/
-    └── skills/
-```
+---
 
 ## Status
 
-This is experimental software built for a specific workflow. It works, but:
+Experimental. Works in practice, but:
 
-- No tests
-- Minimal error handling in places
-- Some UI rough edges
-- The "swarm" terminology in older parts of the codebase is being migrated to "jobs"
+- No automated tests
+- The word "swarm" appears in older parts of the codebase — being migrated to "jobs"
+- Some UI rough edges in the dashboard
 
-Contributions and feedback welcome, but manage expectations accordingly.
+Contributions welcome.
 
 ## License
 

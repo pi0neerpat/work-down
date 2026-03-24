@@ -52,6 +52,26 @@ The `hub` entry (path `.`) must always remain in the list and should not be modi
 
 ---
 
+## bugs.md format
+
+```markdown
+# <Repo Name> — Bugs
+
+## Open
+
+- [ ] First bug here
+
+## Fixed
+
+```
+
+**Rules:**
+- Same checkbox format as todo.md — parsers treat them identically
+- `## Open` for unresolved bugs, `## Fixed` for resolved ones (not `## Done`)
+- Keep separate from todo.md so bugs can be filtered independently in the dashboard
+
+---
+
 ## activity-log.md format
 
 ```markdown

@@ -1,6 +1,6 @@
 ---
 name: workdown
-description: Cross-repo task view and work prioritization. Shows open tasks, recent activity, and active jobs across all connected repos. Recommends what to work on next. Use when the user asks "what should I work on?", wants a status overview, or invokes /workdown.
+description: A CLI view of your markdown files. Shows open tasks, recent activity, and active jobs across all connected repos. Recommends what to work on next. Use when the user asks "what should I work on?", wants a status overview, or invokes /workdown.
 ---
 
 # /workdown — Cross-Repo Status and Priorities

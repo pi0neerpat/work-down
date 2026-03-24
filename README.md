@@ -155,7 +155,7 @@ Three skills are active when Claude Code is opened in the Work.Down directory:
 
 | Skill | Invoke | What it does |
 |-------|--------|--------------|
-| `/workdown` | `/workdown` or "what should I work on?" | Cross-repo task view and work recommendations |
+| `/workdown` | `/workdown` or "what should I work on?" | A CLI view of your markdown files — tasks, activity, and what to work on next |
 | `/add-repo` | `/add-repo` | Connect a new repo to Work.Down |
 | `/done` | `/done` or "we're done" | Mark a task done and log activity manually |
 

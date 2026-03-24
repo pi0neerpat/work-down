@@ -102,17 +102,20 @@ Create any that are missing using the exact formats from [references/formats.md]
 
 ---
 
-## Step 7: Install the hub-stop hook
+## Step 7: Install hooks
 
-This hook signals the dashboard when a Claude job finishes. It's a no-op when the hub isn't running — safe to install without affecting normal Claude usage in that repo.
+Two hooks get installed in every connected repo:
+- **`hub-stop.js`** — signals the dashboard when a dispatched job finishes. No-op when Work.Down isn't running.
+- **`protect-env.js`** — blocks Claude from reading or modifying `.env` files.
 
-**7a. Create the hooks directory and copy the hook file:**
+**7a. Create the hooks directory and copy both hook files:**
 ```bash
 mkdir -p <resolved-path>/.claude/hooks
 cp "$CLAUDE_PROJECT_DIR/.claude/hooks/hub-stop.js" <resolved-path>/.claude/hooks/hub-stop.js
+cp "$CLAUDE_PROJECT_DIR/.claude/hooks/protect-env.js" <resolved-path>/.claude/hooks/protect-env.js
 ```
 
-**7b. Install the hook in that repo's settings.json:**
+**7b. Register both hooks in that repo's settings.json:**
 
 Check if `<resolved-path>/.claude/settings.json` exists:
 ```bash
@@ -123,6 +126,17 @@ test -f <resolved-path>/.claude/settings.json && echo "exists" || echo "missing"
 ```json
 {
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Read|Grep|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/protect-env.js\""
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "matcher": "*",
@@ -138,7 +152,7 @@ test -f <resolved-path>/.claude/settings.json && echo "exists" || echo "missing"
 }
 ```
 
-- **If it exists:** read it, check whether a Stop hook pointing to `hub-stop.js` is already present. If not, merge in the Stop hook entry above — preserve all existing hooks.
+- **If it exists:** read it, check whether each hook is already present. Merge in any that are missing — preserve all existing hooks.
 
 ---
 
@@ -157,8 +171,9 @@ Done. `<name>` is now connected to the hub.
   <path>/todo.md       ✓ created  (or: already existed, left unchanged)
   <path>/bugs.md       ✓ created  (or: already existed, left unchanged)
   <path>/activity-log.md  ✓ created  (or: already existed, left unchanged)
-  <path>/.claude/hooks/hub-stop.js  ✓ installed
-  <path>/.claude/settings.json      ✓ updated
+  <path>/.claude/hooks/hub-stop.js    ✓ installed
+  <path>/.claude/hooks/protect-env.js ✓ installed
+  <path>/.claude/settings.json        ✓ updated
 
 Nothing was installed globally.
 

@@ -13,11 +13,11 @@
 
 | Topic | File | Summary |
 |-------|------|---------|
-| CLI & parsers | `docs/cli-architecture.md` | parsers.js function map (18 exports), cli.js commands, terminal.js structure, task numbering, data flow |
-| Web dashboard | `docs/dashboard-architecture.md` | Express endpoints, event pipeline, React views (Status/Jobs/Tasks/Dispatch/Schedules), hooks, session lifecycle |
+| CLI & parsers | `docs/cli-architecture.md` | parsers.js job/swarm compatibility exports, cli.js command map, terminal.js structure, task numbering, and data flow |
+| Web dashboard | `docs/dashboard-architecture.md` | Express endpoints for jobs/sessions/schedules, runtime state in `.hub-runtime/`, React views, hooks, PTY lifecycle, and Claude resume flow |
 
 ## Standards
 
 | Topic | File | Summary |
 |-------|------|---------|
-| Coding standards | `docs/coding-standards.md` | Style guide covering JS conventions, file organization, API design, data contracts, naming, and CSS theming |
+| Coding standards | `docs/coding-standards.md` | Style guide covering JS conventions, `notes/jobs` file contracts, API naming/alias policy, runtime state files, and CSS theming |

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { CheckCircle, XCircle, Loader, Clock, Square, Activity, ListChecks, GitMerge, Scissors, Network, Trash2, Send, RotateCcw } from 'lucide-react'
+import { CheckCircle, XCircle, Loader, Clock, Square, Activity, ListChecks, GitMerge, Scissors, Network, Trash2, Send, RotateCcw, ChevronRight } from 'lucide-react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { cn, timeAgo } from '../lib/utils'
@@ -7,11 +7,241 @@ import { statusConfig, validationConfig } from '../lib/statusConfig'
 import { repoIdentityColors, MODEL_OPTIONS, FOLLOWUP_TEMPLATES } from '../lib/constants'
 import { mdComponents } from './mdComponents'
 
+function parseFrontMatter(raw) {
+  const text = String(raw || '')
+  if (!text.startsWith('---\n')) {
+    return { frontMatter: null, body: text }
+  }
+
+  const lines = text.split('\n')
+  let endIndex = -1
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i].trim() === '---') {
+      endIndex = i
+      break
+    }
+  }
+
+  if (endIndex === -1) {
+    return { frontMatter: null, body: text }
+  }
+
+  const attrs = []
+  for (const line of lines.slice(1, endIndex)) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#')) continue
+    const sep = trimmed.indexOf(':')
+    if (sep <= 0) continue
+    const key = trimmed.slice(0, sep).trim()
+    const value = trimmed.slice(sep + 1).trim()
+    attrs.push({ key, value })
+  }
+
+  const body = lines.slice(endIndex + 1).join('\n')
+  return { frontMatter: attrs.length > 0 ? attrs : null, body }
+}
+
+function parseBracketedTimestamp(value) {
+  const raw = String(value || '').trim()
+  const match = raw.match(/^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]$/)
+  if (!match) return null
+  const date = new Date(match[1].replace(' ', 'T'))
+  if (Number.isNaN(date.getTime())) return null
+  return date
+}
+
+function formatExactTimestamp(value) {
+  const d = parseBracketedTimestamp(value)
+  if (!d) return null
+  return d.toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+  })
+}
+
+function formatRelativeTimestamp(value) {
+  const d = parseBracketedTimestamp(value)
+  if (!d) return null
+  return timeAgo(d.toISOString())
+}
+
+function formatTimestampsInText(text) {
+  return String(text || '').replace(
+    /\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})\]/g,
+    (_match, datePart, timePart) => {
+      const d = new Date(`${datePart}T${timePart}`)
+      if (Number.isNaN(d.getTime())) return _match
+      const relative = timeAgo(d.toISOString())
+      if (!relative) return _match
+      const exact = d.toLocaleString(undefined, {
+        year: 'numeric', month: 'short', day: 'numeric',
+        hour: 'numeric', minute: '2-digit', second: '2-digit',
+      })
+      return `\`ts:${relative}~~${exact}\``
+    }
+  )
+}
+
+function parseInlineKeyValuePairs(text) {
+  const pairs = []
+  const re = /([A-Za-z][A-Za-z0-9_-]*):\s*([^:]+?)(?=\s+[A-Za-z][A-Za-z0-9_-]*:\s|$)/g
+  let match
+  while ((match = re.exec(text)) !== null) {
+    const key = match[1].trim()
+    const value = match[2].trim()
+    if (key && value) pairs.push({ key, value })
+  }
+  return pairs
+}
+
+function parseJobHeader(bodyText) {
+  const text = String(bodyText || '')
+  const lines = text.split('\n')
+  if (lines.length === 0) return { title: null, attrs: null, body: text }
+
+  let idx = 0
+  let title = null
+  const attrs = []
+  const firstLine = lines[0].trim()
+  const titleMatch = firstLine.match(/^#\s+(?:Swarm|Job)\s+Task:\s*(.+)$/i)
+  if (titleMatch) {
+    title = titleMatch[1].trim()
+    idx = 1
+  }
+
+  for (; idx < lines.length; idx++) {
+    const line = lines[idx]
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    if (/^##\s+/.test(trimmed)) break
+
+    const linePairs = parseInlineKeyValuePairs(trimmed)
+    if (linePairs.length > 0) {
+      attrs.push(...linePairs)
+      continue
+    }
+
+    const sep = trimmed.indexOf(':')
+    if (sep > 0) {
+      const key = trimmed.slice(0, sep).trim()
+      const value = trimmed.slice(sep + 1).trim()
+      if (key && value) attrs.push({ key, value })
+    }
+  }
+
+  return {
+    title: title || null,
+    attrs: attrs.length > 0 ? attrs : null,
+    body: lines.slice(idx).join('\n'),
+  }
+}
+
 function ResultsSummary({ text }) {
   return (
     <div className="rounded-lg border border-card-border bg-card px-5 py-4 text-sm text-foreground/90 leading-loose">
       <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-2">Result Summary</p>
-      <Markdown remarkPlugins={[remarkGfm]} components={mdComponents}>{text}</Markdown>
+      <Markdown remarkPlugins={[remarkGfm]} components={mdComponents}>{formatTimestampsInText(text)}</Markdown>
+    </div>
+  )
+}
+
+function ProgressTimeline({ entries }) {
+  const rows = (entries || []).map((entry) => {
+    const text = String(entry || '')
+    const m = text.match(/^\[([^\]]+)\]\s*(.*)$/)
+    if (!m) return { relative: null, exact: null, text }
+    const timestampToken = m[0].match(/^\[[^\]]+\]/)?.[0] || null
+    const ts = m[1].trim()
+    return {
+      relative: formatRelativeTimestamp(timestampToken),
+      exact: formatExactTimestamp(timestampToken),
+      text: (m[2] || '').trim(),
+    }
+  })
+
+  if (rows.length === 0) return null
+
+  return (
+    <div className="mb-5">
+      <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-2">Progress</p>
+      <div className="rounded-lg border border-card-border bg-card px-4 py-3">
+        <ul className="space-y-2">
+          {rows.map((row, i) => (
+            <li key={`progress-${i}`} className="text-xs text-foreground/90 leading-relaxed">
+              {row.relative ? (
+                <span
+                  className="inline-flex items-center rounded-sm border border-border bg-background/40 px-1.5 py-0.5 mr-2 text-[10px] text-muted-foreground"
+                  title={row.exact || undefined}
+                >
+                  {row.relative}
+                </span>
+              ) : null}
+              <span>{row.text || String(entries[i] || '')}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  )
+}
+
+function FullJobOutput({ rawContent }) {
+  const { frontMatter, body } = parseFrontMatter(rawContent)
+  const { title, attrs, body: markdownBody } = parseJobHeader(body)
+
+  return (
+    <div className="rounded-lg border border-card-border bg-card px-5 py-4 text-sm text-foreground/90 leading-loose space-y-3">
+      {title && (
+        <div>
+          <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-1.5">Job Task</p>
+          <p className="text-foreground/95 leading-relaxed">{title}</p>
+        </div>
+      )}
+      {attrs && (
+        <div className="rounded-md border border-border bg-background/30 px-3 py-2">
+          <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-1.5">Metadata</p>
+          <div className="space-y-1">
+            {attrs.map((item, i) => (
+              <div key={`${item.key}-${i}`} className="grid grid-cols-[auto_1fr] gap-x-2 text-xs">
+                <span className="text-muted-foreground">{item.key}:</span>
+                {formatRelativeTimestamp(item.value) ? (
+                  <span className="text-foreground/90 break-words" title={formatExactTimestamp(item.value) || undefined}>
+                    {formatRelativeTimestamp(item.value)}
+                  </span>
+                ) : (
+                  <span className="text-foreground/90 break-words">{item.value || '""'}</span>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {frontMatter && (
+        <div className="rounded-md border border-border bg-background/30 px-3 py-2">
+          <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-1.5">Front Matter</p>
+          <div className="space-y-1">
+            {frontMatter.map((item) => (
+              <div key={item.key} className="grid grid-cols-[auto_1fr] gap-x-2 text-xs">
+                <span className="text-muted-foreground">{item.key}:</span>
+                {formatRelativeTimestamp(item.value) ? (
+                  <span className="text-foreground/90 break-words" title={formatExactTimestamp(item.value) || undefined}>
+                    {formatRelativeTimestamp(item.value)}
+                  </span>
+                ) : (
+                  <span className="text-foreground/90 break-words">{item.value || '""'}</span>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {markdownBody.trim() && (
+        <Markdown remarkPlugins={[remarkGfm]} components={mdComponents}>{formatTimestampsInText(markdownBody)}</Markdown>
+      )}
     </div>
   )
 }
@@ -362,10 +592,12 @@ export default function ResultsPanel({ agentId, hasLiveTerminal = false, onJobsR
   const [killing, setKilling] = useState(false)
   const [taskMarked, setTaskMarked] = useState(false)
   const [markingDone, setMarkingDone] = useState(false)
+  const [showFullOutput, setShowFullOutput] = useState(false)
 
   useEffect(() => {
     if (!agentId) { setDetail(null); return }
     let cancelled = false
+    let intervalId = null
     setLoading(true)
     setError(null)
     setDetail(null)
@@ -375,6 +607,7 @@ export default function ResultsPanel({ agentId, hasLiveTerminal = false, onJobsR
     setConfirmKill(false)
     setTaskMarked(false)
     setMarkingDone(false)
+    setShowFullOutput(false)
 
     async function fetchDetail() {
       try {
@@ -390,7 +623,11 @@ export default function ResultsPanel({ agentId, hasLiveTerminal = false, onJobsR
     }
 
     fetchDetail()
-    return () => { cancelled = true }
+    intervalId = setInterval(fetchDetail, 3000)
+    return () => {
+      cancelled = true
+      if (intervalId) clearInterval(intervalId)
+    }
   }, [agentId])
 
   function showFeedbackMsg(msg, isError = false) {
@@ -576,7 +813,11 @@ export default function ResultsPanel({ agentId, hasLiveTerminal = false, onJobsR
           <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
             <span className={cn('font-medium', st.color)}>{st.label}</span>
             {relativeTime && (
-              <span className="flex items-center gap-1 font-mono" style={{ fontFamily: 'var(--font-mono)' }}>
+              <span
+                className="flex items-center gap-1 font-mono"
+                style={{ fontFamily: 'var(--font-mono)' }}
+                title={detail.started || undefined}
+              >
                 <Clock size={10} />
                 {relativeTime}
               </span>
@@ -623,12 +864,19 @@ export default function ResultsPanel({ agentId, hasLiveTerminal = false, onJobsR
         </div>
       )}
 
+      <ProgressTimeline entries={detail.progressEntries} />
+
       {detail.rawContent && (
         <div className="mb-5">
-          <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-2">Full Job Output</p>
-          <div className="rounded-lg border border-card-border bg-card px-5 py-4 text-sm text-foreground/90 leading-loose">
-            <Markdown remarkPlugins={[remarkGfm]} components={mdComponents}>{detail.rawContent}</Markdown>
-          </div>
+          <button
+            type="button"
+            onClick={() => setShowFullOutput(v => !v)}
+            className="flex items-center gap-1 text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-2 hover:text-foreground/70 transition-colors"
+          >
+            <ChevronRight size={12} className={cn('transition-transform duration-200', showFullOutput && 'rotate-90')} />
+            Full Job Output
+          </button>
+          {showFullOutput && <FullJobOutput rawContent={detail.rawContent} />}
         </div>
       )}
 
@@ -636,7 +884,7 @@ export default function ResultsPanel({ agentId, hasLiveTerminal = false, onJobsR
         <div className="mb-5">
           <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-2">Validation</p>
           <div className="rounded-lg border border-status-review-border bg-status-review-bg px-4 py-3 text-xs text-foreground/80 leading-relaxed">
-            <Markdown remarkPlugins={[remarkGfm]} components={mdComponents}>{detail.validationNotes}</Markdown>
+            <Markdown remarkPlugins={[remarkGfm]} components={mdComponents}>{formatTimestampsInText(detail.validationNotes)}</Markdown>
           </div>
         </div>
       )}

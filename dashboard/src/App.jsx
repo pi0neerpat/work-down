@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
+import { Routes, Route, Navigate } from 'react-router-dom'
 import { usePolling } from './lib/usePolling'
 import { useSearch } from './lib/useSearch'
 import { useAppNavigation } from './lib/useAppNavigation'
@@ -14,6 +15,16 @@ import DispatchView from './components/DispatchView'
 import SchedulesView from './components/SchedulesView'
 import CommandPalette from './components/CommandPalette'
 import Toast from './components/Toast'
+
+function ScrollableView({ children }) {
+  return (
+    <div className="flex-1 min-h-0 overflow-y-auto px-6 py-5">
+      <div className="max-w-[50rem] mx-auto w-full">
+        {children}
+      </div>
+    </div>
+  )
+}
 
 export default function App() {
   const overview = usePolling('/api/overview', 10000)
@@ -69,7 +80,8 @@ export default function App() {
     lastJobsChangedRefreshRef.current = now
     jobs.refresh()
     overview.refresh()
-  }, [jobs.refresh, overview.refresh])
+    sessions.refresh()
+  }, [jobs.refresh, overview.refresh, sessions.refresh])
 
   const lastRefresh = overview.lastRefresh || jobs.lastRefresh || sessions.lastRefresh
   const error = overview.error || jobs.error || sessions.error
@@ -84,10 +96,10 @@ export default function App() {
   }, [activeTerminalSessionId])
 
   const handleStartTask = useCallback(async (taskText, repoName, dispatchOpts = {}) => {
-    const sessionId = await startTaskSession(taskText, repoName, dispatchOpts)
+    const sessionId = await startTaskSession(taskText, repoName, { ...dispatchOpts, skipPermissions })
     openJobDetail(sessionId)
     return sessionId
-  }, [startTaskSession, openJobDetail])
+  }, [startTaskSession, openJobDetail, skipPermissions])
 
   const handleStartWorker = useCallback((repoName) => {
     const sessionId = startWorkerSession(repoName)
@@ -100,14 +112,18 @@ export default function App() {
   }, [openDispatch])
 
   const handleDispatchComplete = useCallback(() => {
-    setActiveNav('tasks')
+    // Don't navigate here — handleStartTask already navigates to /jobs/:id.
+    // In the old overlay model setActiveNav('tasks') was harmless because
+    // drillDownJobId took priority, but with route-based navigation it would
+    // race and navigate away from the job detail.
     setDispatchPreFill(null)
     showToast('Worker dispatched', 'success')
   }, [showToast])
 
   const handleDispatch = useCallback(async ({ repo, taskText, originalTask, baseBranch, model, maxTurns, autoMerge }) => {
-    await handleStartTask(taskText, repo, { originalTask, baseBranch, model, maxTurns, autoMerge })
-  }, [handleStartTask])
+    // Start the session but DON'T navigate away from dispatch page
+    await startTaskSession(taskText, repo, { originalTask, baseBranch, model, maxTurns, autoMerge, skipPermissions })
+  }, [startTaskSession, skipPermissions])
 
   const handleResumeJob = useCallback(async (jobId) => {
     const sessionId = await resumeJobSession(jobId)
@@ -122,13 +138,12 @@ export default function App() {
     if (!item) return
     if (item.kind === 'repo' || item.kind === 'task') {
       setActiveNav('tasks')
-      setDrillDownJobId(null)
     } else if (item.kind === 'agent') {
       openJobDetail(item.targetId)
     }
     setSearchQuery('')
     setCommandPaletteOpen(false)
-  }, [openJobDetail, setActiveNav, setDrillDownJobId, setCommandPaletteOpen])
+  }, [openJobDetail, setActiveNav, setCommandPaletteOpen])
 
   useEffect(() => {
     function onKeyDown(e) {
@@ -148,18 +163,39 @@ export default function App() {
     sessionRecordsForNav,
   })
 
+  const jobDetailElement = (
+    <div className="absolute inset-0 z-10">
+      <JobDetailView
+        jobId={drillDownJobId}
+        onBack={closeJobDetail}
+        agentTerminals={agentTerminals}
+        jobFileToSession={jobFileToSession}
+        swarm={jobs.data}
+        skipPermissions={skipPermissions}
+        onKillSession={killSession}
+        onUpdateSessionId={updateSessionId}
+        onPromptSent={markPromptSent}
+        onContextUsage={handleContextUsage}
+        onJobsChanged={handleJobsChanged}
+        onJobsRefresh={jobs.refresh}
+        onOverviewRefresh={overview.refresh}
+        onStartTask={handleStartTask}
+        onResumeJob={handleResumeJob}
+        onRemoveSession={removeSession}
+        showToast={showToast}
+      />
+    </div>
+  )
+
   return (
     <div className="h-screen flex flex-col bg-background">
       <HeaderBar
         overview={overview.data}
         activeJobCount={activeJobCount}
         reviewCount={reviewCount}
-        lastRefresh={lastRefresh}
         error={error}
         skipPermissions={skipPermissions}
         onToggleSkipPermissions={() => setSkipPermissions(v => !v)}
-        contextUsage={contextUsage}
-        contextResetInfo={contextResetInfo}
         searchQuery={searchQuery}
         onSearchQueryChange={setSearchQuery}
         searchResults={searchResults}
@@ -176,45 +212,20 @@ export default function App() {
         />
 
         <main className="flex-1 min-w-0 min-h-0 flex flex-col relative">
-          <div
-            className="absolute inset-0 z-10"
-            style={{ display: drillDownJobId ? 'block' : 'none' }}
-          >
-            <JobDetailView
-              jobId={drillDownJobId}
-              onBack={closeJobDetail}
-              agentTerminals={agentTerminals}
-              jobFileToSession={jobFileToSession}
-              swarm={jobs.data}
-              skipPermissions={skipPermissions}
-              onKillSession={killSession}
-              onUpdateSessionId={updateSessionId}
-              onPromptSent={markPromptSent}
-              onContextUsage={handleContextUsage}
-              onJobsChanged={handleJobsChanged}
-              onJobsRefresh={jobs.refresh}
-              onOverviewRefresh={overview.refresh}
-              onStartTask={handleStartTask}
-              onResumeJob={handleResumeJob}
-              onRemoveSession={removeSession}
-              showToast={showToast}
-            />
-          </div>
-
-          <div
-            className="flex-1 min-h-0 overflow-y-auto px-6 py-5"
-            style={{ display: drillDownJobId ? 'none' : 'block' }}
-          >
-            <div className="max-w-[50rem] mx-auto w-full">
-              {activeNav === 'status' && (
+          <Routes>
+            <Route path="/jobs/:jobId" element={jobDetailElement} />
+            <Route path="/status" element={
+              <ScrollableView>
                 <StatusView
                   overview={overview.data}
                   swarm={jobs.data}
                   error={error}
                   lastRefresh={lastRefresh}
                 />
-              )}
-              {activeNav === 'jobs' && (
+              </ScrollableView>
+            } />
+            <Route path="/jobs" element={
+              <ScrollableView>
                 <JobsView
                   swarm={jobs.data}
                   jobFileToSession={jobFileToSession}
@@ -222,8 +233,10 @@ export default function App() {
                   overview={overview.data}
                   onSelectJob={openJobDetail}
                 />
-              )}
-              {activeNav === 'tasks' && (
+              </ScrollableView>
+            } />
+            <Route path="/tasks" element={
+              <ScrollableView>
                 <AllTasksView
                   overview={overview.data}
                   onOverviewRefresh={overview.refresh}
@@ -232,8 +245,10 @@ export default function App() {
                   swarm={jobs.data}
                   agentTerminals={agentTerminals}
                 />
-              )}
-              {activeNav === 'dispatch' && (
+              </ScrollableView>
+            } />
+            <Route path="/dispatch" element={
+              <ScrollableView>
                 <DispatchView
                   overview={overview.data}
                   onDispatch={handleDispatch}
@@ -241,14 +256,17 @@ export default function App() {
                   initialPrompt={dispatchPreFill?.prompt || null}
                   onDispatchComplete={handleDispatchComplete}
                 />
-              )}
-              {activeNav === 'schedules' && (
+              </ScrollableView>
+            } />
+            <Route path="/schedules" element={
+              <ScrollableView>
                 <SchedulesView
                   overview={overview.data}
                 />
-              )}
-            </div>
-          </div>
+              </ScrollableView>
+            } />
+            <Route path="*" element={<Navigate to="/tasks" replace />} />
+          </Routes>
         </main>
       </div>
 

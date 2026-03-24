@@ -7,6 +7,7 @@ import { FilterChip, toggleFilter, BUG_COLOR, loadFilters, saveFilters } from '.
 const TIMEFRAMES = ['past', 'present', 'future']
 const STATUSES = ['open', 'in_progress', 'review', 'done']
 const STORAGE_KEY = 'allTasksView:filters'
+const ADD_TASK_STORAGE_KEY = 'allTasksView:addTask'
 
 const STATUS_LABELS = {
   open: 'Open',
@@ -25,22 +26,29 @@ const STATUS_COLORS = {
 function deriveStatus(task, repoName, agentTerminals, jobAgents) {
   if (task.done) return { status: 'done', jobId: null }
 
-  // Check for active worker
-  if (agentTerminals) {
-    for (const [sessionId, info] of agentTerminals) {
-      if (info.repoName === repoName && info.taskText && task.text.toLowerCase().includes(info.taskText.toLowerCase().slice(0, 30))) {
-        return { status: 'in_progress', jobId: sessionId }
-      }
-    }
-  }
-
-  // Check for job needing review
+  // Prefer canonical job status from the server over local session heuristics.
   if (jobAgents) {
     for (const agent of jobAgents) {
       if (agent.repo === repoName && agent.validation === 'needs_validation') {
         const match = agent.taskName?.toLowerCase().includes(task.text.toLowerCase().slice(0, 30)) ||
           task.text.toLowerCase().includes(agent.taskName?.toLowerCase()?.slice(0, 30) || '')
         if (match) return { status: 'review', jobId: agent.id }
+      }
+    }
+    for (const agent of jobAgents) {
+      if (agent.repo === repoName && agent.status === 'in_progress') {
+        const match = agent.taskName?.toLowerCase().includes(task.text.toLowerCase().slice(0, 30)) ||
+          task.text.toLowerCase().includes(agent.taskName?.toLowerCase()?.slice(0, 30) || '')
+        if (match) return { status: 'in_progress', jobId: agent.id }
+      }
+    }
+  }
+
+  // Fallback for brand-new local sessions before the server has indexed the job.
+  if (agentTerminals) {
+    for (const [sessionId, info] of agentTerminals) {
+      if (!info?.jobFile && info.repoName === repoName && info.taskText && task.text.toLowerCase().includes(info.taskText.toLowerCase().slice(0, 30))) {
+        return { status: 'in_progress', jobId: sessionId }
       }
     }
   }
@@ -189,14 +197,45 @@ export default function AllTasksView({
     }
   }
 
-  // New task form state
+  // New task form state (repo persisted across refresh/navigation)
   const [newTaskText, setNewTaskText] = useState('')
-  const [newTaskRepo, setNewTaskRepo] = useState(() => repoNames[0] || '')
-  const [newTaskIsBug, setNewTaskIsBug] = useState(false)
+  const [newTaskRepo, setNewTaskRepo] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(ADD_TASK_STORAGE_KEY))
+      if (saved?.repo) return saved.repo
+    } catch {}
+    return repoNames[0] || ''
+  })
+  const [newTaskIsBug, setNewTaskIsBug] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(ADD_TASK_STORAGE_KEY))
+      return saved?.isBug ?? false
+    } catch {}
+    return false
+  })
   const [isAdding, setIsAdding] = useState(false)
   const [repoDropdownOpen, setRepoDropdownOpen] = useState(false)
   const inputRef = useRef(null)
   const repoDropdownRef = useRef(null)
+
+  // Sync newTaskRepo when repos load (restore saved or default to first)
+  useEffect(() => {
+    if (repoNames.length > 0 && !repoNames.includes(newTaskRepo)) {
+      try {
+        const saved = JSON.parse(localStorage.getItem(ADD_TASK_STORAGE_KEY))
+        if (saved?.repo && repoNames.includes(saved.repo)) { setNewTaskRepo(saved.repo); return }
+      } catch {}
+      setNewTaskRepo(repoNames[0])
+    }
+  }, [repoNames.join(',')]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Persist add-task settings on change (skip when repos haven't loaded yet to avoid clobbering saved data)
+  useEffect(() => {
+    if (!newTaskRepo) return
+    try {
+      localStorage.setItem(ADD_TASK_STORAGE_KEY, JSON.stringify({ repo: newTaskRepo, isBug: newTaskIsBug }))
+    } catch {}
+  }, [newTaskRepo, newTaskIsBug])
 
   // Close repo dropdown on outside click
   useEffect(() => {

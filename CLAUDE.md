@@ -36,20 +36,21 @@ config.json ─── loadConfig() ───┐
 ## Key Files
 
 - **config.json** -- Repo definitions (names, relative paths, task/activity file names). `hubRoot` (display path) and `monthlyBudget` (optional) are user-specific; set `hubRoot` to your local hub path (e.g. `.` for current dir). Server falls back to `HUB_DIR` when `hubRoot` is unset.
-- **parsers.js** -- CommonJS module. Read functions: `parseTaskFile`, `parseActivityLog`, `getGitInfo`, `parseSwarmFile`, `parseSwarmDir`, `loadConfig`. Write functions: `writeTaskDone`, `writeTaskDoneByText`, `writeTaskAdd`, `writeTaskEdit`, `writeTaskMove`, `writeSwarmValidation`, `writeSwarmKill`, `writeSwarmStatus`, `createCheckpoint`, `revertCheckpoint`, `dismissCheckpoint`, `listCheckpoints`. Zero external dependencies.
+- **parsers.js** -- CommonJS module. Primary job APIs: `parseJobFile`, `parseJobDir`, `writeJobValidation`, `writeJobKill`, `writeJobStatus`. Legacy compatibility aliases (`parseSwarmFile`, `parseSwarmDir`, `writeSwarmValidation`, `writeSwarmKill`, `writeSwarmStatus`) remain exported for older callers. Also owns task/activity parsing, task writes, and checkpoint helpers. Zero external dependencies.
 - **cli.js** -- Agent-friendly CLI. All output is JSON to stdout, errors as JSON to stderr. Commands: `status`, `tasks [--repo=name]`, `swarm [id]`, `repos`, `activity [--limit=N]`, `config`.
 - **terminal.js** -- Human-friendly ANSI terminal dashboard. Read-only display, no interactivity. Uses box-drawing characters.
 - **todo.md** -- Hub's own task tracker (markdown checkboxes).
 - **activity-log.md** -- Hub's own activity log. Contains `**Current stage:**` metadata.
-- **notes/swarm/** -- Swarm sub-agent progress files. Named `YYYY-MM-DD-slug.md`.
+- **notes/jobs/** -- Primary location for job progress files. Named `YYYY-MM-DD-slug.md`. The dashboard also reads legacy `notes/swarm/` files during migration.
+- **.hub-runtime/** -- Server runtime state: `.hub-runtime/job-runs.json` for job run state, `.hub-runtime/prompts/` for staged Claude prompts, `.hub-runtime/events/` for terminal event snapshots/NDJSON.
 
 ### Dashboard (`dashboard/`)
 
 Separate Node.js project with its own `package.json` (ESM, `"type": "module"`).
 
-- **server.js** -- Express backend on port 3001. Imports `../parsers.js` via `createRequire`. REST API for tasks, swarm, sessions, schedules, checkpoints, and events. WebSocket terminal server (`/ws/terminal`) with persistent PTY sessions. Serves built SPA from `dist/`.
+- **server.js** -- Express backend on port 3001. Imports `../parsers.js` via `createRequire`. REST API for overview, tasks, bugs, jobs (`/api/jobs` with legacy `/api/swarm` aliases), sessions, schedules, checkpoints, and events. WebSocket terminal server (`/ws/terminal`) keeps PTY sessions alive across reconnects, stages server-managed Claude launches/resumes, persists run state in `.hub-runtime/job-runs.json`, and normalizes Claude resume commands.
 - **eventPipeline.js** -- Captures terminal output into structured NDJSON events. Line classification, agent detection, event search, session summaries.
-- **src/** -- React SPA with Tailwind CSS v4. Navigation: `ActivityBar` (icon tabs) → views (`StatusView`, `JobsView`, `AllTasksView`, `DispatchView`, `SchedulesView`) with `JobDetailView` drill-down. Hooks: `usePolling`, `useTerminal`, `useSearch`. See `docs/dashboard-architecture.md` for full component tree and data flow.
+- **src/** -- React SPA with Tailwind CSS v4. Navigation: `ActivityBar` (icon tabs) → views (`StatusView`, `JobsView`, `AllTasksView`, `DispatchView`, `SchedulesView`) with `JobDetailView` drill-down. Hooks: `usePolling`, `useSessionStore`, `useTerminal`, `useSearch`. The dashboard starts Claude from the server side, tracks per-launch terminal identity, and can resume Claude with `--resume "<session_id>"`. See `docs/dashboard-architecture.md` for full component tree and data flow.
 - **vite.config.js** -- Proxies `/api` and `/ws` to `localhost:3001` during dev.
 
 ### Clauffice (`clauffice/`)
@@ -87,7 +88,7 @@ yarn start           # Serve built SPA + API from port 3001
 - **CLI output**: Always JSON. Designed for agent consumption. Human output goes through `terminal.js`.
 - **Task format**: Markdown checkboxes (`- [ ]` / `- [x]`) under `##` section headers in `todo.md`.
 - **Activity format**: Date headers (`## YYYY-MM-DD`) with bullet entries in `activity-log.md`.
-- **Swarm file format**: Markdown in `notes/swarm/YYYY-MM-DD-slug.md` with frontmatter-style metadata (`# Swarm Task:`, `Started:`, `Status:`, `Validation:`), then `## Progress`, `## Results`, `## Validation` sections.
+- **Job file format**: Markdown in `notes/jobs/YYYY-MM-DD-slug.md` (legacy `notes/swarm/` still read) with line-based metadata such as `# Job Task:`/`# Swarm Task:`, `Started:`, `Status:`, `Validation:`, `Session:`, optional `SkipPermissions:`, `ResumeId:`, and `ResumeCommand:`, followed by `## Progress`, `## Results`, and `## Validation` sections.
 
 ## Documentation
 
@@ -104,7 +105,7 @@ Detailed architecture docs live in `docs/`. Read these before making structural 
 1. **`.claude/` is READ-ONLY.** Its contents are symlinks from `clauffice/dot-claude/`. To change skills, hooks, agents, etc., edit inside `clauffice/dot-claude/` and run `./clauffice/install.sh`.
 2. **`config.json` is the source of truth** for repo paths and file locations. Do not hardcode repo paths elsewhere.
 3. **`parsers.js` is shared infrastructure.** Test changes against all three consumers (cli.js, terminal.js, dashboard/server.js) before committing.
-4. **Swarm progress files** go in `notes/swarm/YYYY-MM-DD-slug.md` with the standard format (see Conventions above).
+4. **Job progress files** go in `notes/jobs/YYYY-MM-DD-slug.md` with the standard format (see Conventions above). The dashboard still reads legacy `notes/swarm/` files, but new work should use `notes/jobs/`.
 5. **All repos use the same task/activity pattern**: `todo.md` for tasks, `activity-log.md` for activity.
 6. **No TypeScript** in root-level files. The dashboard uses JSX but not TypeScript.
 7. **No external dependencies** for root-level files (parsers.js, cli.js, terminal.js). The dashboard has its own dependency tree.

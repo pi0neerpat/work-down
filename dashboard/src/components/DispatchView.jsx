@@ -1,30 +1,35 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Send, Loader } from 'lucide-react'
 import { cn } from '../lib/utils'
 import { repoIdentityColors, MODEL_OPTIONS } from '../lib/constants'
 
 export default function DispatchView({ overview, onDispatch, initialRepo, initialPrompt, onDispatchComplete }) {
   const repos = overview?.repos || []
-  const [repo, setRepo] = useState(initialRepo || repos[0]?.name || '')
+
+  // Read saved settings synchronously so useState gets correct initial values.
+  // Previously a restore useEffect ran after mount, but the save useEffect also
+  // fired on mount with default values — overwriting localStorage before the
+  // queued state updates from the restore could trigger a second save.
+  const saved = useRef(null)
+  if (saved.current === null) {
+    try { saved.current = JSON.parse(localStorage.getItem('dispatch-settings')) || {} }
+    catch { saved.current = {} }
+  }
+
+  const [repo, setRepo] = useState(initialRepo || saved.current.repo || repos[0]?.name || '')
   const [baseBranch, setBaseBranch] = useState('')
   const [prompt, setPrompt] = useState(initialPrompt || '')
-  const [model, setModel] = useState(MODEL_OPTIONS[0].value)
-  const [maxTurns, setMaxTurns] = useState(10)
-  const [autoMerge, setAutoMerge] = useState(false)
+  const [model, setModel] = useState(saved.current.model || MODEL_OPTIONS[0].value)
+  const [maxTurns, setMaxTurns] = useState(saved.current.maxTurns ?? 10)
+  const [autoMerge, setAutoMerge] = useState(saved.current.autoMerge ?? false)
   const [dispatching, setDispatching] = useState(false)
 
-  // Restore saved dispatch settings on mount
+  // Persist settings on change so they survive route navigation / refresh
   useEffect(() => {
     try {
-      const saved = JSON.parse(localStorage.getItem('dispatch-settings'))
-      if (saved) {
-        if (!initialRepo && saved.repo) setRepo(saved.repo)
-        if (saved.model) setModel(saved.model)
-        if (saved.maxTurns != null) setMaxTurns(saved.maxTurns)
-        if (saved.autoMerge != null) setAutoMerge(saved.autoMerge)
-      }
+      localStorage.setItem('dispatch-settings', JSON.stringify({ repo, model, maxTurns, autoMerge }))
     } catch {}
-  }, [])
+  }, [repo, model, maxTurns, autoMerge])
 
   // Apply pre-fill when props change
   useEffect(() => {
@@ -53,7 +58,6 @@ export default function DispatchView({ overview, onDispatch, initialRepo, initia
         maxTurns,
         autoMerge,
       })
-      localStorage.setItem('dispatch-settings', JSON.stringify({ repo, model, maxTurns, autoMerge }))
       setPrompt('')
       onDispatchComplete?.()
     } catch (err) {

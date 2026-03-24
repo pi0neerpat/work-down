@@ -49,6 +49,16 @@
       "startScript": "cd dashboard && yarn dev",
       "testScript": null,
       "cleanupScript": "cd dashboard && rm -rf dist node_modules/.vite"
+    },
+    {
+      "name": "prompt-guard",
+      "path": "../prompt-guard",
+      "taskFile": "todo.md",
+      "bugsFile": "bugs.md",
+      "activityFile": "activity-log.md",
+      "startScript": "yarn --cwd web dev",
+      "testScript": "yarn --cwd web test",
+      "cleanupScript": "rm -rf web/.next"
     }
   ],
   "hubRoot": "."

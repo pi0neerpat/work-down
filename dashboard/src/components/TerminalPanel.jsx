@@ -17,6 +17,54 @@ function parseProgressText(entry) {
   return entry.replace(/^\[[^\]]+\]\s*/, '').trim()
 }
 
+function shellQuote(value) {
+  const text = String(value ?? '')
+  return `'${text.replace(/'/g, `'\"'\"'`)}'`
+}
+
+function buildResumeCommand(resumeId, skipPermissions = false) {
+  const id = String(resumeId ?? '').trim()
+  if (!id) return ''
+  return `claude${skipPermissions ? ' --dangerously-skip-permissions' : ''} --resume "${id}"`
+}
+
+function buildSpawnPrompt(taskInfo) {
+  let prompt = taskInfo?.taskText || ''
+  prompt += '\n\nUse a strictly linear approach. Do not run tasks in parallel and do not delegate to sub-agents.'
+  if (taskInfo?.jobFile?.relativePath) {
+    prompt += `\n\nWrite progress to: ${taskInfo.jobFile.relativePath}`
+  }
+  return prompt
+}
+
+function wrapTrackedCommand(command) {
+  const cmd = String(command || '').trim()
+  if (!cmd) return ''
+  return `${cmd}; __hub_code=$?; echo "__HUB_CLAUDE_EXIT_CODE:\${__hub_code}__"; exit $__hub_code`
+}
+
+function buildPromptArgFromHeredoc(prompt) {
+  const text = String(prompt ?? '').replace(/\r\n/g, '\n')
+  let marker = '__HUB_PROMPT__'
+  while (text.includes(marker)) {
+    marker += '_X'
+  }
+  return `"$(cat <<'${marker}'\n${text}\n${marker}\n)"`
+}
+
+function buildClaudeCommand({ taskInfo, skipPermissions }) {
+  let flags = ''
+  if (skipPermissions) flags += ' --dangerously-skip-permissions'
+  if (taskInfo?.model) flags += ` --model ${taskInfo.model}`
+  if (taskInfo?.maxTurns) flags += ` --max-turns ${taskInfo.maxTurns}`
+  if (taskInfo?.taskText) {
+    // Use heredoc + command substitution to preserve long/noisy prompt content losslessly.
+    const promptArg = buildPromptArgFromHeredoc(buildSpawnPrompt(taskInfo))
+    return wrapTrackedCommand(`claude${flags} ${promptArg}`)
+  }
+  return wrapTrackedCommand(`claude${flags}`)
+}
+
 
 function AgentHeader({ taskInfo }) {
   const [detail, setDetail] = useState(null)
@@ -220,6 +268,7 @@ function TerminalInstance({
   taskInfo,
   showRaw,
   isActive,
+  isVisible,
   skipPermissions,
   onKill,
   confirmKill,
@@ -235,24 +284,34 @@ function TerminalInstance({
   const resumeSentRef = useRef(false)
 
   const onConnected = useCallback(() => {
-    if (taskInfo?.resumeCommand && !resumeSentRef.current) {
+    // Hidden->visible/layout transitions can leave xterm at stale geometry.
+    // Fit a few times on connect to stabilize the terminal size.
+    fitRef.current?.()
+    setTimeout(() => fitRef.current?.(), 80)
+    setTimeout(() => fitRef.current?.(), 220)
+
+    if (taskInfo?.serverStarted) return
+
+    const resumeCommand = taskInfo?.resumeId
+      ? buildResumeCommand(taskInfo.resumeId, taskInfo?.skipPermissions === true)
+      : taskInfo?.resumeCommand
+
+    if (resumeCommand && !resumeSentRef.current) {
       resumeSentRef.current = true
       setTimeout(() => {
         fitRef.current?.()
-        sendCommandRef.current?.(taskInfo.resumeCommand)
+        sendCommandRef.current?.(wrapTrackedCommand(resumeCommand))
       }, 500)
       return
     }
     if (promptSentRef.current) return
+    promptSentRef.current = true
+    onPromptSent?.(sessionId)
     setTimeout(() => {
-      // Re-fit so PTY has correct dimensions before the command renders
       fitRef.current?.()
-      let flags = skipPermissions ? ' --dangerously-skip-permissions' : ''
-      if (taskInfo?.model) flags += ` --model ${taskInfo.model}`
-      if (taskInfo?.maxTurns) flags += ` --max-turns ${taskInfo.maxTurns}`
-      sendCommandRef.current?.('claude' + flags)
-    }, 500)
-  }, [skipPermissions, taskInfo?.model, taskInfo?.maxTurns, taskInfo?.resumeCommand])
+      sendCommandRef.current?.(buildClaudeCommand({ taskInfo, skipPermissions }))
+    }, 450)
+  }, [skipPermissions, taskInfo, onPromptSent, sessionId])
 
   const onTerminalData = useCallback((data) => {
     const stripped = data.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '')
@@ -274,21 +333,7 @@ function TerminalInstance({
       }
     }
 
-    if (promptSentRef.current || !taskInfo?.taskText) return
-    if (data.includes('\u276F') || data.includes('bypass permissions')) {
-      promptSentRef.current = true
-      onPromptSent?.(sessionId)
-      let prompt = taskInfo.taskText
-      prompt += '\n\nUse a strictly linear approach. Do not run tasks in parallel and do not delegate to sub-agents.'
-      if (taskInfo.jobFile?.relativePath) {
-        prompt += `\n\nWrite progress to: ${taskInfo.jobFile.relativePath}`
-      }
-      setTimeout(() => {
-        sendRawRef.current?.(prompt)
-        setTimeout(() => sendRawRef.current?.('\r'), 200)
-      }, 1000)
-    }
-  }, [taskInfo, sessionId, onPromptSent, onContextUsage])
+  }, [onContextUsage, sessionId])
 
   const handleSessionId = useCallback((id) => {
     onUpdateSessionId?.(sessionId, id)
@@ -312,12 +357,15 @@ function TerminalInstance({
     fitRef.current = fit
   }, [sendCommand, sendRaw, fit])
 
-  // Re-fit when this terminal becomes the visible/active one
+  // Re-fit when this terminal becomes active or when parent view becomes visible.
   useEffect(() => {
-    if (isActive) {
-      requestAnimationFrame(() => fit())
+    if (isActive && isVisible) {
+      requestAnimationFrame(() => {
+        fit()
+        setTimeout(() => fit(), 80)
+      })
     }
-  }, [isActive, fit])
+  }, [isActive, isVisible, fit])
 
   const handleRestart = useCallback(() => {
     promptSentRef.current = false
@@ -381,9 +429,13 @@ function TerminalInstance({
   )
 }
 
-export default function TerminalPanel({ sessions, activeSessionId, skipPermissions, onKillSession, onUpdateSessionId, onPromptSent, onContextUsage, onJobsChanged }) {
-  const hasTerminal = activeSessionId && sessions.has(activeSessionId)
+export default function TerminalPanel({ sessions, activeSessionId, isVisible = true, skipPermissions, onKillSession, onUpdateSessionId, onPromptSent, onContextUsage, onJobsChanged }) {
+  const hasTerminal = Boolean(activeSessionId && sessions.has(activeSessionId))
   const [confirmKill, setConfirmKill] = useState(null)
+  const activeInfo = hasTerminal ? sessions.get(activeSessionId) : null
+  const activeTerminalKey = hasTerminal
+    ? `${activeSessionId}:${activeInfo?.launchToken || 'stable'}`
+    : null
 
   useEffect(() => {
     setConfirmKill(null)
@@ -402,26 +454,24 @@ export default function TerminalPanel({ sessions, activeSessionId, skipPermissio
   return (
     <div className="h-full relative flex flex-col">
       <div className="relative flex-1 min-h-0">
-        {[...sessions.entries()].map(([id, info]) => {
-          const active = hasTerminal && id === activeSessionId
-          return (
-            <div key={id} className="absolute inset-0" style={{ display: active ? 'block' : 'none' }}>
-              <TerminalInstance
-                sessionId={id}
-                taskInfo={info}
-                showRaw={true}
-                isActive={active}
-                skipPermissions={skipPermissions}
-                onKill={() => handleKill(id)}
-                confirmKill={confirmKill === id}
-                onUpdateSessionId={onUpdateSessionId}
-                onPromptSent={onPromptSent}
-                onContextUsage={onContextUsage}
-                onJobsChanged={onJobsChanged}
-              />
-            </div>
-          )
-        })}
+        {hasTerminal && activeInfo && (
+          <div key={activeTerminalKey} className="absolute inset-0">
+            <TerminalInstance
+              sessionId={activeSessionId}
+              taskInfo={activeInfo}
+              showRaw={true}
+              isActive={true}
+              isVisible={isVisible}
+              skipPermissions={skipPermissions}
+              onKill={() => handleKill(activeSessionId)}
+              confirmKill={confirmKill === activeSessionId}
+              onUpdateSessionId={onUpdateSessionId}
+              onPromptSent={onPromptSent}
+              onContextUsage={onContextUsage}
+              onJobsChanged={onJobsChanged}
+            />
+          </div>
+        )}
       </div>
 
       {!hasTerminal && (

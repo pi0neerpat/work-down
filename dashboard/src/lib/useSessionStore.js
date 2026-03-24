@@ -5,6 +5,20 @@ function shallowStableEqual(a, b) {
   return JSON.stringify(a) === JSON.stringify(b)
 }
 
+function makeSessionId() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `session-${crypto.randomUUID()}`
+  }
+  return `session-${Date.now()}-${Math.floor(Math.random() * 1e6)}`
+}
+
+function makeLaunchToken() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return `${Date.now()}-${Math.floor(Math.random() * 1e6)}`
+}
+
 export function useSessionStore() {
   const sessions = usePolling('/api/sessions', 5000)
   const [agentTerminals, setAgentTerminals] = useState(new Map())
@@ -34,6 +48,8 @@ export function useSessionStore() {
           created: s.created || existing.created || Date.now(),
           ptySessionId: s.id,
           alive: s.alive !== false,
+          serverStarted: s.serverStarted === true,
+          launchToken: existing.launchToken || null,
           promptSent: existing.promptSent ?? true,
         }
         if (!shallowStableEqual(existing, nextInfo)) {
@@ -74,28 +90,31 @@ export function useSessionStore() {
   }, [])
 
   const startTaskSession = useCallback(async (taskText, repoName, dispatchOpts = {}) => {
-    const sessionId = 'session-' + Date.now()
+    const optimisticSessionId = makeSessionId()
+    const launchToken = makeLaunchToken()
     let jobFile = null
 
-    try {
-      const res = await fetch('/api/jobs/init', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          repo: repoName,
-          taskText,
-          originalTask: dispatchOpts.originalTask || undefined,
-          sessionId,
-          model: dispatchOpts.model || undefined,
-          maxTurns: dispatchOpts.maxTurns || undefined,
-          autoMerge: dispatchOpts.autoMerge || undefined,
-          baseBranch: dispatchOpts.baseBranch || undefined,
-        }),
-      })
-      if (res.ok) {
-        jobFile = await res.json()
-      }
-    } catch { /* proceed without job file */ }
+    const res = await fetch('/api/jobs/init', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        repo: repoName,
+        taskText,
+        originalTask: dispatchOpts.originalTask || undefined,
+        sessionId: optimisticSessionId,
+        model: dispatchOpts.model || undefined,
+        maxTurns: dispatchOpts.maxTurns || undefined,
+        autoMerge: dispatchOpts.autoMerge || undefined,
+        baseBranch: dispatchOpts.baseBranch || undefined,
+        skipPermissions: dispatchOpts.skipPermissions === true,
+      }),
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.error || `Dispatch init failed: ${res.status}`)
+    }
+    jobFile = await res.json()
+    const sessionId = jobFile.sessionId || optimisticSessionId
 
     setAgentTerminals(prev => {
       const next = new Map(prev)
@@ -104,7 +123,11 @@ export function useSessionStore() {
         repoName,
         jobFile,
         created: Date.now(),
+        ptySessionId: sessionId,
         alive: true,
+        promptSent: jobFile.serverStarted === true,
+        serverStarted: jobFile.serverStarted === true,
+        launchToken,
         model: dispatchOpts.model || null,
         maxTurns: dispatchOpts.maxTurns || null,
       })
@@ -115,10 +138,10 @@ export function useSessionStore() {
   }, [])
 
   const startWorkerSession = useCallback((repoName) => {
-    const sessionId = 'session-' + Date.now()
+    const sessionId = makeSessionId()
     setAgentTerminals(prev => {
       const next = new Map(prev)
-      next.set(sessionId, { taskText: '', repoName, jobFile: null, created: Date.now(), alive: true })
+      next.set(sessionId, { taskText: '', repoName, jobFile: null, created: Date.now(), alive: true, promptSent: false, launchToken: makeLaunchToken() })
       return next
     })
     return sessionId
@@ -132,7 +155,8 @@ export function useSessionStore() {
       throw new Error(data.error || `Resume failed: ${res.status}`)
     }
     const data = await res.json()
-    const sessionId = data.sessionId || ('session-' + Date.now())
+    const sessionId = data.sessionId || makeSessionId()
+    const launchToken = makeLaunchToken()
 
     setAgentTerminals(prev => {
       const next = new Map(prev)
@@ -143,7 +167,10 @@ export function useSessionStore() {
         created: Date.now(),
         ptySessionId: sessionId,
         alive: true,
-        promptSent: true,
+        promptSent: data.serverStarted === true ? true : true,
+        serverStarted: data.serverStarted === true,
+        launchToken,
+        skipPermissions: data.skipPermissions === true,
         resumeCommand: data.resumeCommand || null,
         resumeId: data.resumeId || null,
       })
@@ -156,7 +183,7 @@ export function useSessionStore() {
   const removeSession = useCallback((id) => {
     const info = agentTerminals.get(id)
     if (info?.ptySessionId) {
-      fetch(`/api/sessions/${encodeURIComponent(info.ptySessionId)}`, { method: 'DELETE' }).catch(() => {})
+      fetch(`/api/sessions/${encodeURIComponent(info.ptySessionId)}/purge`, { method: 'DELETE' }).catch(() => {})
     }
     setAgentTerminals(prev => {
       const next = new Map(prev)

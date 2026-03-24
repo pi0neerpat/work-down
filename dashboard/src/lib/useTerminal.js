@@ -107,7 +107,7 @@ export function useTerminal({ onConnected, onIncomingData, onJobsChanged, repo, 
       // During intentional reattach, the superseded socket can surface proxy noise (ECONNRESET).
       setIsConnected(false)
     }
-  }, [])
+  }, [repo, sessionId, jobFilePath])
 
   const sendRaw = useCallback((data) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {

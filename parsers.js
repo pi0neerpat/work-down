@@ -121,6 +121,7 @@ function parseJobFile(filePath) {
   const id = path.basename(filePath, '.md');
   let taskName = '', started = '', status = 'unknown', validation = 'none', agentId = null, skills = [];
   let originalTask = '', session = null, repo = null;
+  let skipPermissions = null;
   let resumeId = null, resumeCommand = null;
   const progressEntries = [];
   let results = null;
@@ -160,6 +161,13 @@ function parseJobFile(filePath) {
       const sessionMatch = line.match(/^Session:\s*(.+)/);
       if (sessionMatch) { session = sessionMatch[1].trim(); continue; }
 
+      const skipPermissionsMatch = line.match(/^SkipPermissions:\s*(.+)/);
+      if (skipPermissionsMatch) {
+        const raw = skipPermissionsMatch[1].trim().toLowerCase();
+        skipPermissions = raw === 'true' || raw === 'yes' || raw === '1';
+        continue;
+      }
+
       const resumeIdMatch = line.match(/^ResumeId:\s*(.+)/);
       if (resumeIdMatch) { resumeId = resumeIdMatch[1].trim(); continue; }
 
@@ -181,9 +189,9 @@ function parseJobFile(filePath) {
         const bullet = line.match(/^[-*]\s+(.+)/);
         if (bullet) progressEntries.push(bullet[1]);
       } else if (currentSection === 'results' || currentSection === 'results summary') {
-        if (line.trim()) resultLines.push(line);
+        resultLines.push(line);
       } else if (currentSection === 'validation') {
-        if (line.trim()) validationLines.push(line);
+        validationLines.push(line);
       }
     }
 
@@ -206,7 +214,7 @@ function parseJobFile(filePath) {
 
   return {
     id, taskName, started, status, validation, agentId, skills,
-    originalTask, session, resumeId, resumeCommand, repo,
+    originalTask, session, skipPermissions, resumeId, resumeCommand, repo,
     lastProgress, progressCount, durationMinutes, resultsSummary,
     progressEntries, results, validationNotes, rawContent,
   };
@@ -346,6 +354,31 @@ function writeTaskAdd(filePath, text, section) {
         const sm = lines[i].match(/^##\s+(.+)/);
         if (sm) { matchedSection = sm[1]; break; }
       }
+    }
+  }
+
+  if (insertIndex === -1) {
+    // Final fallback: find any task line in the file (handles files without ## sections,
+    // e.g. tasks directly under a # heading or at top level)
+    let lastTaskLine = -1;
+    for (let i = 0; i < lines.length; i++) {
+      const taskMatch = lines[i].match(/^(\d+\.\s+|[-*]\s+)\[[ x]\]/);
+      if (taskMatch) {
+        lastTaskLine = i;
+      }
+    }
+    if (lastTaskLine >= 0) {
+      // Skip past any indented sub-tasks beneath the last top-level task
+      let j = lastTaskLine + 1;
+      while (j < lines.length && /^\s+([-*]\s+|\d+\.\s+)\[[ x]\]/.test(lines[j])) {
+        j++;
+      }
+      insertIndex = j;
+      for (let i = lastTaskLine; i >= 0; i--) {
+        const hm = lines[i].match(/^#+\s+(.+)/);
+        if (hm) { matchedSection = hm[1]; break; }
+      }
+      if (!matchedSection) matchedSection = '(top level)';
     }
   }
 

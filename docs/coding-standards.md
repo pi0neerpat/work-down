@@ -1,7 +1,7 @@
 # Scribular Hub — Coding Standards
 
 Authoritative style guide for the Scribular coordination hub and its dashboard.
-Last updated: 2026-03-11.
+Last updated: 2026-03-21.
 
 ---
 
@@ -159,9 +159,10 @@ hub/
       styles/          # CSS (Tailwind + theme)
     vite.config.js     # Build configuration
     package.json       # Dashboard-only dependencies
+  .hub-runtime/        # Runtime state: job-runs.json, staged prompts, event logs
   plans/               # Markdown planning documents
   notes/
-    swarm/             # Swarm agent progress files (YYYY-MM-DD-slug.md)
+    jobs/              # Primary job progress files (YYYY-MM-DD-slug.md)
   docs/                # Documentation
   clauffice/           # Claude Code configuration source (generates .claude/)
 ```
@@ -287,8 +288,8 @@ The dashboard API mirrors the CLI commands:
 | Endpoint | CLI equivalent | Description |
 |---|---|---|
 | `GET /api/overview` | `cli.js status` | Full overview (stage, repos, tasks, git) |
-| `GET /api/swarm` | `cli.js swarm` | All swarm agents with summary counts |
-| `GET /api/swarm/:id` | `cli.js swarm <id>` | Single agent detail |
+| `GET /api/jobs` (legacy `/api/swarm`) | `cli.js swarm` | All job agents with summary counts |
+| `GET /api/jobs/:id` (legacy `/api/swarm/:id`) | `cli.js swarm <id>` | Single job detail |
 | `GET /api/config` | `cli.js config` | Raw hub config |
 
 ### Polling intervals
@@ -296,7 +297,7 @@ The dashboard API mirrors the CLI commands:
 | Endpoint | Interval | Rationale |
 |---|---|---|
 | `/api/overview` | 10 seconds | Task and git data change slowly |
-| `/api/swarm` | 5 seconds | Agent status updates need faster feedback |
+| `/api/swarm` | 5 seconds | Legacy alias still used by the client for job status polling |
 
 ### Server configuration
 
@@ -375,12 +376,14 @@ Parser behavior:
 - Captures the first bullet under each date as the entry summary.
 - Returns `{ stage, entries: [{ date, bullet }] }`.
 
-### Swarm file format (`notes/swarm/YYYY-MM-DD-slug.md`)
+### Job file format (`notes/jobs/YYYY-MM-DD-slug.md`)
 
 ```markdown
-# Swarm Task: Task Name Here
+# Job Task: Task Name Here
 Started: 2026-03-11
 Status: In progress
+Session: session-abc123
+SkipPermissions: true
 
 ## Progress
 - [2026-03-11] Step one description
@@ -394,10 +397,14 @@ Notes on validation status.
 ```
 
 Header fields (parsed from line-level patterns, not YAML frontmatter):
-- `# Swarm Task: <name>` — Task title.
+- `# Job Task: <name>` — Preferred task title header.
+- `# Swarm Task: <name>` — Legacy header still accepted by parsers.
 - `Started: <date>` — ISO date string.
 - `Status: <value>` — Normalized to: `in_progress`, `completed`, `failed`, or the raw lowercase value.
 - `Validation: <value>` — Optional. Values like `needs_validation`, `validated`, `rejected`.
+- `Session: <id>` — PTY session ID used by the dashboard to reconnect/resume.
+- `SkipPermissions: <bool>` — Whether Claude was launched with `--dangerously-skip-permissions`.
+- `ResumeId: <id>` and `ResumeCommand: <cmd>` — Persisted when Claude emits a resumable session id.
 
 Section content:
 - `## Progress` — Bullet list of timestamped progress entries.
@@ -406,6 +413,8 @@ Section content:
 
 The file ID is derived from the filename (minus `.md` extension):
 e.g., `2026-03-11-create-claude-md.md` becomes ID `2026-03-11-create-claude-md`.
+
+The dashboard still reads legacy `notes/swarm/` directories and parser aliases, but new work should be written to `notes/jobs/`.
 
 ---
 
@@ -455,7 +464,7 @@ dashboard.
 | React components | PascalCase `.jsx` | `SwarmPanel.jsx`, `HeaderBar.jsx`, `TaskBoard.jsx` |
 | Hooks and utilities | camelCase `.js` | `usePolling.js`, `utils.js` |
 | Markdown docs | kebab-case `.md` | `web-dashboard-plan.md`, `coding-standards.md` |
-| Swarm progress files | `YYYY-MM-DD-slug.md` | `2026-03-11-create-claude-md.md` |
+| Job progress files | `YYYY-MM-DD-slug.md` | `2026-03-11-create-claude-md.md` |
 | Config | camelCase `.json` | `config.json` |
 | CSS | kebab-case `.css` | `theme.css`, `tailwind.css` |
 
@@ -469,7 +478,7 @@ dashboard.
 | Constants (config-like) | UPPER_SNAKE_CASE | `HUB_DIR`, `PORT`, `COLS` |
 | CSS custom properties | `--kebab-case` | `--background`, `--status-active`, `--card-border` |
 | Config keys (JSON) | camelCase | `taskFile`, `activityFile`, `resolvedPath`, `hubRoot` |
-| API endpoint paths | kebab-case | `/api/overview`, `/api/swarm/:id` |
+| API endpoint paths | kebab-case | `/api/overview`, `/api/jobs/:id` |
 | CLI commands | lowercase single word | `status`, `tasks`, `swarm`, `repos` |
 
 ---
@@ -516,10 +525,11 @@ There is currently no automated test suite. Validation is manual:
 
 - **CLI:** Run `node cli.js status` and verify JSON output.
 - **Terminal:** Run `node terminal.js` and visually inspect the ANSI rendering.
-- **Dashboard:** Run `npm run dev` in `dashboard/` and check the browser at
+- **Dashboard:** Run `yarn dev` in `dashboard/` and check the browser at
   `http://localhost:5173`.
-- **Swarm tasks:** Check the `Status:` field and `## Validation` section in
-  swarm progress files.
+- **Job tasks:** Check the `Status:`, `SkipPermissions:`, and optional
+  `ResumeId:` / `ResumeCommand:` headers plus the `## Validation` section in
+  job progress files.
 
 When adding new parser functions, verify they return safe defaults when given
 missing files, empty files, and malformed content.

@@ -108,6 +108,7 @@ export default function JobDetailView({
           <TerminalPanel
             sessions={agentTerminals}
             activeSessionId={activeTerminalSessionId}
+            isVisible={view === 'terminal'}
             skipPermissions={skipPermissions}
             onKillSession={onKillSession}
             onUpdateSessionId={onUpdateSessionId}

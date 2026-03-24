@@ -21,8 +21,23 @@ export const mdComponents = {
       {children}
     </pre>
   ),
-  code: ({ inline, children }) => {
-    if (inline) {
+  code: ({ node, children, ...props }) => {
+    const text = Array.isArray(children) ? children.join('') : String(children || '')
+    if (text.startsWith('ts:')) {
+      const parts = text.slice(3).split('~~')
+      const relative = parts[0]
+      const exact = parts[1] || undefined
+      return (
+        <span
+          className="inline-flex items-center rounded-sm border border-border bg-background/40 px-1.5 py-0.5 text-[10px] text-muted-foreground"
+          title={exact}
+        >
+          {relative}
+        </span>
+      )
+    }
+    const isInline = !node?.properties?.className
+    if (isInline) {
       return (
         <code className="px-1 py-0.5 rounded bg-secondary/60 text-[11px] font-mono" style={{ fontFamily: 'var(--font-mono)' }}>
           {children}

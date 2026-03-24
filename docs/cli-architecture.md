@@ -21,6 +21,8 @@ All three JS files have **zero npm dependencies**. They run with a bare `node` i
 
 Every consumer (CLI, terminal, dashboard server) imports from `parsers.js`. This is the **only** place data is parsed or written.
 
+Primary naming has moved from "swarm" to "job". The parser exports the new `parseJob*` / `writeJob*` functions and keeps `parseSwarm*` / `writeSwarm*` aliases for compatibility.
+
 ### Read Functions
 
 | Function | Input | Output | What It Parses |
@@ -29,8 +31,10 @@ Every consumer (CLI, terminal, dashboard server) imports from `parsers.js`. This
 | `parseTaskFile(filePath)` | Path to `todo.md` | `{ sections: [{ name, tasks: [{ text, done }] }], openCount, doneCount }` | Markdown `## Section` headers + `- [ ]`/`- [x]` checkboxes |
 | `parseActivityLog(filePath)` | Path to `activity-log.md` | `{ stage, entries: [{ date, bullet }] }` | `**Current stage:**` line + `## YYYY-MM-DD` headers + first bullet per date |
 | `getGitInfo(repoPath)` | Repo directory path | `{ branch, dirtyCount }` | `git branch --show-current` + `git status --porcelain` |
-| `parseSwarmFile(filePath)` | Path to swarm `.md` file | `{ id, taskName, started, status, validation, progressEntries, results, ... }` | Swarm file header metadata + `## Progress`, `## Results`, `## Validation` sections |
-| `parseSwarmDir(dirPath)` | Path to `notes/swarm/` dir | `[parseSwarmFile result, ...]` | All `.md` files in the directory |
+| `parseJobFile(filePath)` | Path to job `.md` file | `{ id, taskName, started, status, validation, session, skipPermissions, resumeId, resumeCommand, ... }` | Job/swarm file header metadata + `## Progress`, `## Results`, `## Validation` sections |
+| `parseJobDir(dirPath)` | Path to `notes/jobs/` or legacy `notes/swarm/` dir | `[parseJobFile result, ...]` | All `.md` files in the directory |
+| `parseSwarmFile(filePath)` | Legacy alias of `parseJobFile` | Same as `parseJobFile` | Backward compatibility for older callers |
+| `parseSwarmDir(dirPath)` | Legacy alias of `parseJobDir` | Same as `parseJobDir` | Backward compatibility for older callers |
 
 ### Write Functions
 
@@ -41,9 +45,12 @@ Every consumer (CLI, terminal, dashboard server) imports from `parsers.js`. This
 | `writeTaskAdd(filePath, text, section)` | Inserts a `- [ ]` line after the last task in a section | `todo.md` |
 | `writeTaskEdit(filePath, taskNum, newText)` | Replaces the text of the Nth open task | `todo.md` |
 | `writeTaskMove(sourceFile, taskNum, destFile, section)` | Removes task from source, adds to destination | Two `todo.md` files |
-| `writeSwarmValidation(filePath, status, notes)` | Sets `Validation:` line, appends `## Validation Notes` | Swarm `.md` file |
-| `writeSwarmKill(filePath)` | Sets `Status: Killed`, writes `.kill` marker file | Swarm `.md` file |
-| `writeSwarmStatus(filePath, newStatus)` | Updates the `Status:` line to a new value | Swarm `.md` file |
+| `writeJobValidation(filePath, status, notes)` | Sets `Validation:` line, appends `## Validation Notes` | Job `.md` file |
+| `writeJobKill(filePath)` | Sets `Status: Killed`, writes `.kill` marker file | Job `.md` file |
+| `writeJobStatus(filePath, newStatus)` | Updates the `Status:` line to a new value | Job `.md` file |
+| `writeSwarmValidation(filePath, status, notes)` | Legacy alias of `writeJobValidation` | Job `.md` file |
+| `writeSwarmKill(filePath)` | Legacy alias of `writeJobKill` | Job `.md` file |
+| `writeSwarmStatus(filePath, newStatus)` | Legacy alias of `writeJobStatus` | Job `.md` file |
 | `createCheckpoint(repoPath)` | Creates a git branch capturing current working directory | Git (new branch) |
 | `revertCheckpoint(repoPath, id)` | Restores working directory from checkpoint branch | Git (checkout + delete branch) |
 | `dismissCheckpoint(repoPath, id)` | Deletes checkpoint branch, keeps current state | Git (delete branch) |
@@ -102,7 +109,7 @@ cli.js
 ├── Config loader (loadConfig)
 ├── Data gatherers
 │   ├── gatherRepos()  — calls parseTaskFile, parseActivityLog, getGitInfo per repo
-│   └── gatherSwarm()  — calls parseSwarmDir per repo, tags with repo name
+│   └── gatherSwarm()  — uses the legacy swarm command vocabulary while reading job/swarm markdown via parser compatibility aliases
 ├── Read commands (cmdStatus, cmdTasks, cmdSwarm, cmdRepos, cmdActivity, cmdConfig)
 ├── Write commands (cmdTasksDone, cmdTasksAdd, cmdSwarmValidate, cmdSwarmReject)
 ├── Checkpoint commands (cmdCheckpointCreate, cmdCheckpointRevert, cmdCheckpointDismiss, cmdCheckpointList)
@@ -151,7 +158,7 @@ loadConfig(hubDir)
     ├──► parseTaskFile(todo.md)      ──► { sections, openCount, doneCount }
     ├──► parseActivityLog(activity-log.md) ──► { stage, entries }
     ├──► getGitInfo(repoPath)        ──► { branch, dirtyCount }
-    └──► parseSwarmDir(notes/swarm/) ──► [{ id, status, progress, results, ... }]
+    └──► parseJobDir(notes/jobs/ or notes/swarm/) ──► [{ id, status, progress, results, ... }]
              │
              ├──► cli.js     → JSON stdout
              ├──► terminal.js → ANSI box art
@@ -159,3 +166,5 @@ loadConfig(hubDir)
 ```
 
 All write operations (`writeTaskDone`, `writeTaskAdd`, etc.) go through `parsers.js` and are consumed by both `cli.js` (write commands) and `dashboard/server.js` (POST endpoints).
+
+The CLI command surface still uses `swarm` for compatibility, but the dashboard/server side has standardized on jobs (`notes/jobs`, `/api/jobs`) while continuing to accept the older names as aliases.

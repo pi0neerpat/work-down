@@ -26,7 +26,5 @@ dashboard/.yarn/install-state.gz
 # Package lock (using Yarn, not npm)
 dashboard/package-lock.json
 
-# Plans (working drafts)
-plans/
 
 .hub-runtime/

@@ -87,6 +87,8 @@ dashboard/
 
 ESM module. Bridges to `parsers.js` (CommonJS) via `createRequire`.
 
+The dashboard is the canonical job runtime. It reads both `notes/jobs/` and legacy `notes/swarm/`, stores run state in `.hub-runtime/job-runs.json`, stages prompt files in `.hub-runtime/prompts/`, and stores terminal event output in `.hub-runtime/events/`.
+
 ### REST API Endpoints
 
 #### Read Endpoints
@@ -95,8 +97,8 @@ ESM module. Bridges to `parsers.js` (CommonJS) via `createRequire`.
 |----------|--------------------------|
 | `GET /api/config` | `loadConfig` |
 | `GET /api/overview` | `parseTaskFile`, `parseActivityLog`, `getGitInfo`, `listCheckpoints` |
-| `GET /api/swarm` | `parseSwarmDir` |
-| `GET /api/swarm/:id` | `parseSwarmFile` |
+| `GET /api/jobs` and legacy `GET /api/swarm` | `parseJobDir` |
+| `GET /api/jobs/:id` and legacy `GET /api/swarm/:id` | `parseJobFile` |
 | `GET /api/activity` | `parseActivityLog` |
 | `GET /api/sessions` | Reads from `ptySessions` Map |
 | `GET /api/sessions/:id/events` | `eventPipeline.getSessionEvents` (paginated, filterable by kind) |
@@ -104,22 +106,26 @@ ESM module. Bridges to `parsers.js` (CommonJS) via `createRequire`.
 | `GET /api/repos/:name/checkpoints` | `listCheckpoints` |
 | `GET /api/schedules` | Reads `schedules.json` |
 | `GET /api/events/search` | `eventPipeline.searchEvents` |
+| `GET /api/job-runs` | Reads `.hub-runtime/job-runs.json` |
 
 #### Write Endpoints
 
 | Endpoint | parsers.js Function | What It Does |
 |----------|---------------------|--------------|
-| `POST /api/swarm/init` | None (direct `fs.writeFileSync`) | Creates swarm file from task text |
+| `POST /api/jobs/init` and legacy `POST /api/swarm/init` | None (server writes markdown + starts PTY) | Creates job file, stages prompt, creates PTY, marks run `starting` |
 | `POST /api/tasks/done` | `writeTaskDone` | Mark open task as done by index |
 | `POST /api/tasks/done-by-text` | `writeTaskDoneByText` | Mark open task as done by text match |
 | `POST /api/tasks/edit` | `writeTaskEdit` | Edit task text |
 | `POST /api/tasks/add` | `writeTaskAdd` | Add new task to todo.md |
+| `POST /api/bugs/done`, `/done-by-text`, `/add`, `/edit` | `writeTaskDone`, `writeTaskDoneByText`, `writeTaskAdd`, `writeTaskEdit` | Bug tracker write operations |
 | `POST /api/tasks/move` | `writeTaskMove` | Move task between repos |
-| `POST /api/swarm/:id/validate` | `writeSwarmValidation` | Set validation to "validated" |
-| `POST /api/swarm/:id/reject` | `writeSwarmValidation` | Set validation to "rejected" |
-| `POST /api/swarm/:id/kill` | `writeSwarmKill` | Mark agent as killed |
-| `POST /api/swarm/:id/merge` | None (git operations) | Merge agent branch into target |
-| `DELETE /api/swarm/:id` | None (fs unlink) | Delete swarm file |
+| `POST /api/jobs/:id/resume` and legacy `POST /api/swarm/:id/resume` | None (server relaunch) | Recreates PTY under the same tracked session and launches `claude --resume "<id>"` with stored flags |
+| `POST /api/hooks/stop-ready` | None | Stop hook callback that transitions an active run to review-ready |
+| `POST /api/jobs/:id/validate` and legacy `POST /api/swarm/:id/validate` | `writeJobValidation` | Set validation to "validated" and finalize run state |
+| `POST /api/jobs/:id/reject` and legacy `POST /api/swarm/:id/reject` | `writeJobValidation` | Set validation to "rejected" |
+| `POST /api/jobs/:id/kill` and legacy `POST /api/swarm/:id/kill` | `writeJobKill` | Mark agent as killed and stop PTY |
+| `POST /api/jobs/:id/merge` and legacy `POST /api/swarm/:id/merge` | None (git operations) | Merge agent branch into target |
+| `DELETE /api/jobs/:id` and legacy `DELETE /api/swarm/:id` | None (fs unlink) | Delete job file and remove run history |
 | `POST /api/repos/:name/checkpoint` | `createCheckpoint` |
 | `POST /api/repos/:name/checkpoint/:id/revert` | `revertCheckpoint` |
 | `DELETE /api/repos/:name/checkpoint/:id` | `dismissCheckpoint` |
@@ -127,7 +133,8 @@ ESM module. Bridges to `parsers.js` (CommonJS) via `createRequire`.
 | `PUT /api/schedules/:id` | None (JSON file) | Update schedule |
 | `DELETE /api/schedules/:id` | None (JSON file) | Delete schedule |
 | `POST /api/schedules/:id/toggle` | None (JSON file) | Toggle schedule enabled/disabled |
-| `DELETE /api/sessions/:id` | None (kills PTY) | Kill PTY session |
+| `DELETE /api/sessions/:id` | None (soft kill) | Kill PTY process but retain scrollback/event history for review |
+| `DELETE /api/sessions/:id/purge` | None (hard delete) | Remove a retained session record entirely |
 | `POST /api/sessions/:id/chat` | `eventPipeline.answerFromEvents` | Ask questions about session history |
 
 **Schedules storage policy exception**
@@ -142,13 +149,18 @@ Path: `/ws/terminal`
 **Query parameters:**
 - `repo` — Repo name (resolves cwd)
 - `session` — Session ID for reconnect
-- `swarmFile` — Absolute path to swarm file (for completion tracking)
+- `jobFile` — Absolute path to job file (for completion tracking)
+- `swarmFile` — Legacy alias of `jobFile`
 
 **Protocol:**
 - Client → Server: raw keystrokes, or `\x01RESIZE:cols,rows`
 - Server → Client: raw terminal output, or `\x01SESSION:id` (on new session)
 
-**Session persistence:** PTY sessions survive WebSocket disconnects. The `ptySessions` Map holds `{ shell, repo, cwd, scrollback, alive, swarmFilePath }`. On reconnect, scrollback is replayed. On shell exit, if the session has a `swarmFilePath` with `in_progress` status, it's auto-updated to `completed`.
+**Session persistence:** PTY sessions survive WebSocket disconnects. The `ptySessions` Map retains the live PTY plus metadata such as `{ repo, cwd, scrollback, alive, jobFilePath, serverStarted, pendingLaunch, resumeId, resumeCommand }`. On reconnect, scrollback is replayed. Dead sessions are retained for review until purged or garbage-collected.
+
+**Server-managed Claude launch:** New jobs and resumed jobs are launched from the server, not by typing commands from the client. The first terminal resize triggers `startPendingLaunch()`, which writes a tracked Claude command into the PTY. This is how dispatch, resume, and `--dangerously-skip-permissions` stay consistent across reconnects.
+
+**Resume metadata capture:** When Claude emits a resume command, the server normalizes it and persists `ResumeCommand`, `ResumeId`, and `SkipPermissions` back into the job markdown so later resumes can reliably reconstruct `claude --resume "<id>"`.
 
 **Event capture:** Terminal output is fed to `eventPipeline` for line classification and structured event storage.
 
@@ -212,16 +224,16 @@ The app uses a flat navigation with optional drill-down:
 
 | Component | Data Source | Write Actions |
 |-----------|------------|---------------|
-| **App** | `usePolling('/api/overview')`, `usePolling('/api/swarm')`, localStorage | Manages `agentTerminals` Map, session persistence |
+| **App** | `usePolling('/api/overview')`, `usePolling('/api/swarm')`, localStorage | Manages navigation, skip-permissions mode, and the local terminal session map |
 | **ActivityBar** | Props from App | Navigation changes, badge counts for jobs/review |
 | **StatusView** | Props (`overview`, `swarm`) | — |
 | **JobsView** | Props (`swarm`, `agentTerminals`) | Select job for drill-down |
 | **AllTasksView** | Props (`overview`) | `POST /api/tasks/done`, `/add`, `/edit`, `/move`, start task |
 | **DispatchView** | Props (repos from overview) | Creates swarm + terminal session |
 | **SchedulesView** | Own fetch to `/api/schedules` | CRUD via `/api/schedules` endpoints |
-| **JobDetailView** | `GET /api/swarm/:id` | Tab between terminal and review |
+| **JobDetailView** | `GET /api/jobs/:id` (legacy `/api/swarm/:id` also works) | Tab between terminal and review |
 | **TerminalPanel** | `agentTerminals` Map | Kill session, update session ID |
-| **ResultsPanel** | `GET /api/swarm/:id` | `POST /api/swarm/:id/validate`, `/reject`, `/kill`, `/merge` |
+| **ResultsPanel** | `GET /api/jobs/:id` (legacy `/api/swarm/:id` also works) | `POST /api/jobs/:id/validate`, `/reject`, `/kill`, `/merge`, `/resume` |
 | **CommandPalette** | `useSearch` (indexes repos, tasks, agents) | Navigation to results |
 
 ### Shared Patterns
@@ -256,7 +268,7 @@ const { data, loading, error, lastRefresh, refresh } = usePolling('/api/overview
 - Uses `AbortController` for cleanup
 - All API data flows through this hook (overview at 10s, swarm at 5s)
 
-### useTerminal({ onConnected, onIncomingData, repo, sessionId, onSessionId, swarmFilePath })
+### useTerminal({ onConnected, onIncomingData, onJobsChanged, repo, sessionId, onSessionId, jobFilePath })
 
 ```js
 const { termRef, isConnected, sendCommand, sendRaw, reconnect } = useTerminal({ ... })
@@ -268,6 +280,7 @@ const { termRef, isConnected, sendCommand, sendRaw, reconnect } = useTerminal({ 
 - `sendRaw(data)` — sends raw bytes
 - `reconnect({ reattach })` — reconnects; if `reattach: true`, skips `onConnected` callback
 - Handles container resize via `ResizeObserver` → `FitAddon`
+- Uses `jobFilePath` as the canonical file association and still accepts the legacy `swarmFile` query alias on the server
 
 ### useSearch(overview, swarm)
 
@@ -277,32 +290,32 @@ const { termRef, isConnected, sendCommand, sendRaw, reconnect } = useTerminal({ 
 
 ---
 
-## ID Mapping: Sessions vs Swarm Files
+## ID Mapping: Sessions vs Job Files
 
-The dashboard uses **two ID spaces** for swarm agents.
+The dashboard uses **two ID spaces** for worker jobs.
 
 | ID Type | Format | Where Used |
 |---------|--------|------------|
 | Client session ID | `session-1710000000` | `agentTerminals` Map keys, `drillDownJobId` |
-| Swarm file ID | `2026-03-11-slug` | API endpoints (`/api/swarm/:id`), swarm data |
+| Job file ID | `2026-03-11-slug` | API endpoints (`/api/jobs/:id` and legacy `/api/swarm/:id`), job markdown data |
 
-The `agentTerminals` Map bridges these: each entry stores `{ swarmFile: { fileName, relativePath, absolutePath } }`. App.jsx derives `swarmFileId` by stripping `.md` from `fileName`.
+The `agentTerminals` Map bridges these: each entry stores `{ jobFile: { fileName, relativePath, absolutePath } }`. The UI also tracks a per-launch token so resuming a job into the same session ID remounts the terminal instead of leaving the old dead PTY attached.
 
 ---
 
 ## Terminal Session Lifecycle
 
 1. User fills out DispatchView form (repo, task, model, turns) and clicks "Dispatch"
-2. `App.handleStartTask` → `POST /api/swarm/init` (creates swarm file) → adds to `agentTerminals` Map
+2. `App.handleStartTask` → `POST /api/jobs/init` (legacy `/api/swarm/init` also works) → server writes a job file in `notes/jobs/`, stages a prompt file, creates a PTY, and adds the session to `agentTerminals`
 3. Navigation switches to Jobs view with drill-down to the new job
 4. `JobDetailView` renders `TerminalPanel` with a `TerminalInstance`
-5. `useTerminal` opens WebSocket to `/ws/terminal?repo=name&swarmFile=path`
-6. Server spawns PTY (`/bin/zsh --login`) in repo directory, returns `\x01SESSION:id`
-7. `onConnected` fires → sends `claude --dangerously-skip-permissions` command
-8. Terminal output watcher detects Claude's `❯` prompt → sends `/swarm <task text>`
-9. Terminal output is captured by `eventPipeline.ingestLine()` for structured event storage
-10. When PTY shell exits, server checks swarm file — if `in_progress`, marks as `completed`
-11. Client's `/api/swarm` polling picks up the status change within 5 seconds
+5. `useTerminal` opens WebSocket to `/ws/terminal?repo=name&jobFile=path&session=sessionId`
+6. Server either reattaches to the existing PTY or spawns `/bin/zsh --login`, then returns `\x01SESSION:id`
+7. The first resize event triggers `startPendingLaunch()`, which writes a tracked Claude command into the PTY. For new work this is `claude [flags] "$(cat promptFile)"`; for resumes it is `claude [flags] --resume "<resumeId>"`
+8. Terminal output is captured by `eventPipeline.ingestLine()` for structured event storage and by the server's resume-command detector
+9. When Claude prints a resume command, the server persists normalized `ResumeCommand`, `ResumeId`, and `SkipPermissions` into the job file
+10. On PTY exit, the run transitions to review/failed/killed state and the job markdown is updated accordingly
+11. If the user clicks Resume later, `POST /api/jobs/:id/resume` recreates the PTY under the same tracked session ID, replays prior scrollback, and relaunches Claude with the stored flags
 
 ---
 

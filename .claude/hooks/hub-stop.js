@@ -1,11 +1,9 @@
 #!/usr/bin/env node
 /**
- * hub-stop.js — Stop hook for Hub-managed Claude sessions.
+ * hub-stop.js — Stop hook for Work-Down managed Claude sessions.
  *
- * Signals the Hub server when a Claude session ends, so the dashboard
- * can update job status. Only active when Hub-specific env vars are set
- * (injected by the dashboard when dispatching a job). Outside Hub-dispatched
- * sessions, this hook is a no-op.
+ * Only signals Hub when Work-Down specific env vars are present.
+ * Outside Work-Down dispatched sessions, this hook is a no-op.
  */
 
 const fs = require("fs");

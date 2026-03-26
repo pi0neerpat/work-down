@@ -1,4 +1,5 @@
 import { createRequire } from 'module'
+import { execFileSync } from 'child_process'
 import express from 'express'
 import cors from 'cors'
 import path from 'path'
@@ -526,7 +527,7 @@ function findRepoConfig(name) {
 }
 
 app.post(['/api/jobs/init', '/api/swarm/init'], (req, res) => {
-  const { repo, taskText, originalTask, sessionId, model, maxTurns, autoMerge, baseBranch, skipPermissions } = req.body
+  const { repo, taskText, originalTask, sessionId, ai, model, maxTurns, autoMerge, baseBranch, skipPermissions } = req.body
   if (!repo || !taskText) return res.status(400).json({ error: 'repo and taskText required' })
 
   const repoConfig = findRepoConfig(repo)
@@ -1005,8 +1006,14 @@ app.post(['/api/jobs/:id/validate', '/api/swarm/:id/validate'], (req, res) => {
     if (detail.session && ptySessions.has(detail.session)) {
       const s = ptySessions.get(detail.session)
       s.suppressFinalize = true
+      if (s.tmuxName) { killTmuxSession(s.tmuxName); delete ptySessionsMeta[detail.session]; savePtySessionsMeta() }
       try { s?.shell?.kill() } catch {}
       ptySessions.delete(detail.session)
+    } else if (detail.session && ptySessionsMeta[detail.session]?.tmuxName) {
+      // Session may have survived a server restart in tmux — kill it now
+      killTmuxSession(ptySessionsMeta[detail.session].tmuxName)
+      delete ptySessionsMeta[detail.session]
+      savePtySessionsMeta()
     }
     if (latestRun) {
       transitionRun(latestRun, RUN_STATE.VALIDATED, { validation: 'validated', reason: 'user_validated', force: true })
@@ -1082,6 +1089,7 @@ app.post(['/api/jobs/:id/kill', '/api/swarm/:id/kill'], (req, res) => {
       const s = ptySessions.get(detail.session)
       s.killRequested = true
       try { transitionRun(getLatestRunBySessionId(detail.session), RUN_STATE.STOPPING, { reason: 'user_kill_requested', force: true }) } catch {}
+      if (s.tmuxName) killTmuxSession(s.tmuxName)
       try { s?.shell?.kill() } catch {}
     }
     invalidateGitInfoCache(found.repo.resolvedPath)
@@ -1311,6 +1319,38 @@ const SCROLLBACK_LIMIT = 50000 // characters of recent output to buffer for reco
 const DEAD_SESSION_TTL_MS = 6 * 60 * 60 * 1000
 const SESSION_GC_INTERVAL_MS = 5 * 60 * 1000
 
+// ── tmux-backed session persistence ──────────────────────
+// PTY sessions are wrapped in named tmux sessions so they survive server restarts.
+// When node --watch restarts the server, tmux detaches the client but keeps the
+// session alive. On reconnect the client gets reattached to the same session.
+const PTY_SESSIONS_FILE = path.join(RUNTIME_DIR, 'pty-sessions.json')
+const ptySessionsMeta = (() => {
+  try {
+    if (!fs.existsSync(PTY_SESSIONS_FILE)) return {}
+    return JSON.parse(fs.readFileSync(PTY_SESSIONS_FILE, 'utf8'))
+  } catch { return {} }
+})()
+
+function savePtySessionsMeta() {
+  try {
+    fs.mkdirSync(RUNTIME_DIR, { recursive: true })
+    fs.writeFileSync(PTY_SESSIONS_FILE, JSON.stringify(ptySessionsMeta, null, 2))
+  } catch {}
+}
+
+function makeTmuxName(sessionId) {
+  // tmux names: max 50 chars, no dots, colons, or spaces
+  return `wd-${sessionId.replace('session-', '').slice(0, 12)}`
+}
+
+function tmuxSessionAlive(name) {
+  try { execFileSync('tmux', ['has-session', '-t', name], { stdio: 'ignore' }); return true } catch { return false }
+}
+
+function killTmuxSession(name) {
+  try { execFileSync('tmux', ['kill-session', '-t', name], { stdio: 'ignore' }) } catch {}
+}
+
 function parseKindsParam(value) {
   if (!value) return null
   const kinds = new Set(
@@ -1374,7 +1414,29 @@ function startPendingLaunch(session) {
 setInterval(garbageCollectSessions, SESSION_GC_INTERVAL_MS)
 
 function createPtySession(sessionId, cwd, repoName, jobFilePath, initialScrollback = '', launch = null, pendingLaunch = null) {
-  const spawnSpec = launch || { file: '/bin/zsh', args: ['--login'] }
+  let spawnSpec = launch || { file: '/bin/zsh', args: ['--login'] }
+  let tmuxName = null
+
+  if (!launch) {
+    // Wrap shell in tmux so the session survives server restarts
+    const candidate = makeTmuxName(sessionId)
+    try {
+      if (!tmuxSessionAlive(candidate)) {
+        execFileSync('tmux', ['new-session', '-d', '-s', candidate, '-x', '220', '-y', '50'], {
+          cwd,
+          env: { ...process.env, TERM: 'xterm-256color' },
+          stdio: 'ignore',
+        })
+      }
+      tmuxName = candidate
+      spawnSpec = { file: 'tmux', args: ['attach-session', '-t', tmuxName] }
+      ptySessionsMeta[sessionId] = { tmuxName, cwd, repoName: repoName || null, jobFilePath: jobFilePath || null }
+      savePtySessionsMeta()
+    } catch (err) {
+      console.warn(`[PTY] tmux unavailable (${err.message}), using direct shell`)
+    }
+  }
+
   const shell = pty.spawn(spawnSpec.file, spawnSpec.args, {
     name: 'xterm-256color',
     cols: 80,
@@ -1400,6 +1462,7 @@ function createPtySession(sessionId, cwd, repoName, jobFilePath, initialScrollba
     launchStarted: Boolean(launch),
     resumeCommand: null,
     resumeId: null,
+    tmuxName: tmuxName || null,
     eventStore: createSessionEventStore({
       sessionId,
       repo: repoName || null,
@@ -1410,6 +1473,18 @@ function createPtySession(sessionId, cwd, repoName, jobFilePath, initialScrollba
   const finalizeSession = (reason = 'unknown') => {
     if (!session.alive) return
     session.alive = false
+    // Clean up tmux session — but only if it's actually gone (normal exit).
+    // If tmux is still alive here it means the server restarted and killed the
+    // node-pty process while the inner shell was still running; in that case we
+    // keep the tmux session alive so the client can reattach after restart.
+    if (session.tmuxName) {
+      if (!tmuxSessionAlive(session.tmuxName) || session.killRequested) {
+        killTmuxSession(session.tmuxName)
+        delete ptySessionsMeta[sessionId]
+        savePtySessionsMeta()
+      }
+      // else: tmux session still alive — preserve metadata for post-restart reattach
+    }
     if (session.suppressFinalize) {
       cleanupPromptFile(session.pendingLaunch?.promptFilePath)
       if (session.ws) {
@@ -1665,9 +1740,14 @@ app.delete('/api/sessions/:id/purge', (req, res) => {
   if (session?.alive) {
     session.killRequested = true
     session.suppressFinalize = true
+    if (session.tmuxName) killTmuxSession(session.tmuxName)
     try { session.shell.kill() } catch {}
   }
   ptySessions.delete(req.params.id)
+  // Also clean up any orphaned tmux session (e.g. after server restart)
+  const meta = ptySessionsMeta[req.params.id]
+  if (meta?.tmuxName && !session?.tmuxName) killTmuxSession(meta.tmuxName)
+  if (meta) { delete ptySessionsMeta[req.params.id]; savePtySessionsMeta() }
   res.json({ ok: true, mode: 'purge' })
 })
 
@@ -1686,6 +1766,26 @@ wss.on('connection', (ws, req) => {
   // Try to reattach to existing session
   if (sessionId && ptySessions.has(sessionId)) {
     session = ptySessions.get(sessionId)
+  } else if (sessionId && ptySessionsMeta[sessionId]?.tmuxName) {
+    // Server may have restarted — try to reconnect to the persistent tmux session
+    const meta = ptySessionsMeta[sessionId]
+    if (tmuxSessionAlive(meta.tmuxName)) {
+      try {
+        session = createPtySession(
+          sessionId,
+          meta.cwd,
+          meta.repoName,
+          meta.jobFilePath || jobFilePath,
+          '' // scrollback lost on restart, client will see fresh output
+        )
+      } catch (err) {
+        console.error('[PTY] Failed to reattach to tmux session:', err.message)
+      }
+    } else {
+      // tmux session is gone — clean up stale metadata
+      delete ptySessionsMeta[sessionId]
+      savePtySessionsMeta()
+    }
   }
 
   if (session) {

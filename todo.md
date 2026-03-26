@@ -2,6 +2,7 @@
 
 ## Open
 
+- [ ] Determine if there will be conflicts if two machines are running the dashboard, and managing the same todo files. Eg separate backends, but same markdown files.
 - [x] Example task: configure repos in config.json
 - [ ] Review the current code for quality and brevity.
 - [x] Update the Hub Logo to Work.Down

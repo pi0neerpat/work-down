@@ -37,7 +37,7 @@ notes/swarm/
 plans/
 
 # Clauffice (removed — now installed globally)
-clauffice/
+.claude/skills/agent-cribs/
 
 # Agent runtime
 .agents/

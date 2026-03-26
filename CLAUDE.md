@@ -1,3 +1,5 @@
+AGENT_CRIBS_SLUG: scribular
+
 # Claude Agent Hub
 
 A multi-repo coordination hub for Claude Code agent workflows. Aggregates tasks, activity, and agent job progress across multiple repos. Includes a CLI, terminal dashboard, and web dashboard.

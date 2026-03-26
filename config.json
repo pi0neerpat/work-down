@@ -1,8 +1,8 @@
 {
   "repos": [
     {
-      "name": "app",
-      "path": "../my-app",
+      "name": "example-app",
+      "path": "../example-app",
       "taskFile": "todo.md",
       "bugsFile": "bugs.md",
       "activityFile": "activity-log.md",
@@ -11,7 +11,7 @@
       "cleanupScript": "rm -rf dist"
     },
     {
-      "name": "hub",
+      "name": "work-down",
       "path": ".",
       "taskFile": "todo.md",
       "bugsFile": "bugs.md",

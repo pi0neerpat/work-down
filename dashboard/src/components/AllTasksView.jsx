@@ -66,7 +66,7 @@ function AutoGrowTextarea({ value, onChange, onKeyDown, onBlur, autoFocus, class
   }, [value])
   useEffect(() => {
     if (autoFocus && ref.current) {
-      ref.current.focus()
+      ref.current.focus({ preventScroll: true })
       ref.current.selectionStart = ref.current.value.length
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -432,7 +432,7 @@ export default function AllTasksView({
             const repoColor = repoIdentityColors[task.repoName] || 'var(--primary)'
             const sc = STATUS_COLORS[task.status]
             const isClickable = (task.status === 'in_progress' || task.status === 'review') && task.jobId
-            const taskKey = `${task.repoName}-${task.section}-${i}`
+            const taskKey = `${task.repoName}-${task.section}-${task.status}-${i}`
             const isEditing = editingTaskKey === taskKey
             const isEditable = !task.done && task.openTaskNum
             return (

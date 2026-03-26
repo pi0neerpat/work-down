@@ -645,7 +645,7 @@ function createCheckpoint(repoPath) {
     throw new Error('already on a checkpoint branch');
   }
 
-  const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 15).replace(/^(\d{8})(\d{6})/, '$1-$2');
+  const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14).replace(/^(\d{8})(\d{6})/, '$1-$2');
   const checkpointId = `checkpoint/${timestamp}`;
 
   // Count files that will be captured

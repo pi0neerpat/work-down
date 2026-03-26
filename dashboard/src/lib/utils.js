@@ -12,7 +12,13 @@ export function cn(...inputs) {
 export function timeAgo(started, durationMinutes) {
   let mins = durationMinutes
   if (mins == null && started) {
-    const d = new Date(started)
+    // Timestamps from job files are UTC but may lack a 'Z' suffix
+    let normalized = String(started)
+    if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(normalized)) {
+      normalized = normalized.replace(' ', 'T')
+      if (!normalized.endsWith('Z')) normalized += 'Z'
+    }
+    const d = new Date(normalized)
     if (!isNaN(d.getTime())) {
       mins = Math.round((Date.now() - d.getTime()) / 60000)
     }

@@ -211,7 +211,8 @@ function parseJobFile(filePath) {
 
   let durationMinutes = null;
   if (started) {
-    const startDate = new Date(started);
+    const normalized = started.includes('T') ? started : started.replace(' ', 'T');
+    const startDate = new Date(normalized.endsWith('Z') ? normalized : normalized + 'Z');
     if (!isNaN(startDate.getTime())) {
       durationMinutes = Math.round((Date.now() - startDate.getTime()) / 60000);
     }

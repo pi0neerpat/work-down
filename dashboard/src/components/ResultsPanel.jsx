@@ -45,7 +45,7 @@ function parseBracketedTimestamp(value) {
   const raw = String(value || '').trim()
   const match = raw.match(/^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]$/)
   if (!match) return null
-  const date = new Date(match[1].replace(' ', 'T'))
+  const date = new Date(match[1].replace(' ', 'T') + 'Z')
   if (Number.isNaN(date.getTime())) return null
   return date
 }
@@ -73,7 +73,7 @@ function formatTimestampsInText(text) {
   return String(text || '').replace(
     /\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})\]/g,
     (_match, datePart, timePart) => {
-      const d = new Date(`${datePart}T${timePart}`)
+      const d = new Date(`${datePart}T${timePart}Z`)
       if (Number.isNaN(d.getTime())) return _match
       const relative = timeAgo(d.toISOString())
       if (!relative) return _match

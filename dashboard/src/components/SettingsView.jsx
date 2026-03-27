@@ -2,8 +2,8 @@ import { Bot, Sparkles } from 'lucide-react'
 import { useAgentModels } from '../lib/useAgentModels'
 import Toggle from './Toggle'
 
-function AgentCard({ agentId, label, icon: Icon, agentSettings, onUpdate, showMaxTurns = true }) {
-  const { defaultModel, defaultMaxTurns, skipPermissions, extraFlags } = agentSettings
+function AgentCard({ agentId, label, icon: Icon, agentSettings, onUpdate, showMaxTurns = true, showTuiMode = false }) {
+  const { defaultModel, defaultMaxTurns, skipPermissions, tuiMode, extraFlags } = agentSettings
   const models = useAgentModels(agentId)
 
   return (
@@ -64,6 +64,20 @@ function AgentCard({ agentId, label, icon: Icon, agentSettings, onUpdate, showMa
         </div>
       </div>
 
+      {/* TUI Mode */}
+      {showTuiMode && (
+        <div className="flex items-center gap-3">
+          <Toggle
+            checked={tuiMode}
+            onChange={(val) => onUpdate(agentId, { tuiMode: val })}
+          />
+          <div>
+            <span className="text-[12px] text-foreground/80">TUI Mode</span>
+            <p className="text-[10px] text-muted-foreground/50">-p (plain output to terminal)</p>
+          </div>
+        </div>
+      )}
+
       {/* Extra Flags */}
       <div>
         <label className="block text-[11px] font-medium text-muted-foreground mb-1">Extra Flags</label>
@@ -96,6 +110,7 @@ export default function SettingsView({ settings, onUpdateAgent }) {
           agentSettings={settings.agents.claude}
           onUpdate={onUpdateAgent}
           showMaxTurns={true}
+          showTuiMode={true}
         />
         <AgentCard
           agentId="codex"

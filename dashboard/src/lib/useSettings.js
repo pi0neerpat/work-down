@@ -4,8 +4,8 @@ const STORAGE_KEY = 'hub-settings'
 
 const DEFAULT_SETTINGS = {
   agents: {
-    claude: { defaultModel: 'claude-opus-4-6', defaultMaxTurns: 10, skipPermissions: true, extraFlags: '' },
-    codex:  { defaultModel: 'gpt-5.4',          defaultMaxTurns: null, skipPermissions: false, extraFlags: '' },
+    claude: { defaultModel: 'claude-opus-4-6', defaultMaxTurns: 10, skipPermissions: true, tuiMode: false, extraFlags: '' },
+    codex:  { defaultModel: 'gpt-5.4',          defaultMaxTurns: null, skipPermissions: false, tuiMode: false, extraFlags: '' },
   },
 }
 

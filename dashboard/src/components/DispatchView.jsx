@@ -34,7 +34,7 @@ export default function DispatchView({ overview, onDispatch, initialRepo, initia
   const [baseBranch, setBaseBranch] = useState('')
   const [prompt, setPrompt] = useState(initialPrompt || '')
   const [autoMerge, setAutoMerge] = useState(s.autoMerge ?? false)
-  const [plainOutput, setPlainOutput] = useState(s.plainOutput ?? false)
+  const [plainOutput, setPlainOutput] = useState(s.plainOutput ?? agentSettings[s.agent || 'claude']?.tuiMode ?? false)
   const [dispatching, setDispatching] = useState(false)
   const [btnPhase, setBtnPhase] = useState('idle') // idle | shaking | sliding | hidden | returning
 
@@ -66,9 +66,11 @@ export default function DispatchView({ overview, onDispatch, initialRepo, initia
     const defaults = agentSettings[newAgent] || {}
     const newModel = defaults.defaultModel || ''
     const newTurns = defaults.defaultMaxTurns ?? (newAgent === 'claude' ? 10 : null)
+    const newPlainOutput = defaults.tuiMode ?? false
     setModel(newModel)
     setMaxTurns(newTurns)
-    writeSaved({ agent: newAgent, model: newModel, maxTurns: newTurns })
+    setPlainOutput(newPlainOutput)
+    writeSaved({ agent: newAgent, model: newModel, maxTurns: newTurns, plainOutput: newPlainOutput })
   }
 
   // Persist individual fields immediately on change
@@ -263,7 +265,7 @@ export default function DispatchView({ overview, onDispatch, initialRepo, initia
           </div>
 
           <div>
-            <label className="block text-[11px] font-medium text-muted-foreground mb-1">Plain</label>
+            <label className="block text-[11px] font-medium text-muted-foreground mb-1">TUI</label>
             <div className="h-8 flex items-center">
               <Toggle
                 checked={!isCodex && plainOutput}
@@ -275,7 +277,7 @@ export default function DispatchView({ overview, onDispatch, initialRepo, initia
           </div>
 
           <div>
-            <label className="block text-[11px] font-medium text-muted-foreground mb-1">Merge</label>
+            <label className="block text-[11px] font-medium text-muted-foreground mb-1">Auto-Merge</label>
             <div className="h-8 flex items-center">
               <Toggle checked={autoMerge} onChange={setAutoMerge} />
             </div>

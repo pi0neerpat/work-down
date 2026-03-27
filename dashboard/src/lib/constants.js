@@ -7,7 +7,8 @@ export const repoIdentityColors = {
   website: '#8488a8',    // cool lavender-grey
   electron: '#7ea89a',   // sage green
   'prompt-guard': '#c8844a',  // orange
-  hub: '#7a9eaa',        // steel blue
+  dispatch: '#8bab8f',   // sage green (primary)
+  hub: '#7a9eaa',        // steel blue (legacy)
   clauffice: '#a87a8e',  // dusty mauve
 }
 

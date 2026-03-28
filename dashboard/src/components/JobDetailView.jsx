@@ -27,19 +27,19 @@ export default function JobDetailView({
   const [view, setView] = useState('review')
 
   const hasTerminal = agentTerminals.has(jobId)
+  const taskInfo = hasTerminal ? agentTerminals.get(jobId) : null
+  const activePlainOutput = taskInfo?.plainOutput ?? false
 
   // Auto-select the appropriate tab when the job changes or when a terminal
   // first becomes available (handles page-refresh reconstruction delay)
   useEffect(() => {
     if (!jobId) return
-    const info = agentTerminals.get(jobId)
-    if (info && info.ptySessionId) {
-      setView(info.plainOutput ? 'review' : 'terminal')
+    if (taskInfo && taskInfo.ptySessionId) {
+      setView(activePlainOutput ? 'review' : 'terminal')
     } else if (!hasTerminal) {
       setView('review')
     }
-  }, [jobId, hasTerminal]) // eslint-disable-line react-hooks/exhaustive-deps
-  const taskInfo = hasTerminal ? agentTerminals.get(jobId) : null
+  }, [jobId, hasTerminal, activePlainOutput]) // eslint-disable-line react-hooks/exhaustive-deps
   const repoName = taskInfo?.repoName || ''
   const repoColor = repoIdentityColors[repoName] || 'var(--primary)'
 

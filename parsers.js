@@ -633,6 +633,24 @@ function writeJobStatus(filePath, newStatus) {
   return { success: true, id: parsed.id, status: newStatus };
 }
 
+/**
+ * Write plain text output to the ## Results section of a job file.
+ * No-ops if the section already has content.
+ */
+function writeJobResults(filePath, text) {
+  const content = fs.readFileSync(filePath, 'utf8');
+  const marker = '\n## Results\n';
+  const idx = content.indexOf(marker);
+  if (idx === -1) return;
+  const insertAt = idx + marker.length;
+  const nextSection = content.indexOf('\n## ', insertAt);
+  const existing = content.slice(insertAt, nextSection !== -1 ? nextSection : undefined).trim();
+  if (existing) return; // already has content
+  const before = content.slice(0, insertAt);
+  const after = nextSection !== -1 ? content.slice(nextSection) : '';
+  fs.writeFileSync(filePath, `${before}\n${text}\n${after}`, 'utf8');
+}
+
 // ── Checkpoint operations ────────────────────────────────
 
 /**
@@ -965,6 +983,7 @@ module.exports = {
   writeJobValidation,
   writeJobKill,
   writeJobStatus,
+  writeJobResults,
   // Legacy aliases for compatibility during migration
   writeSwarmValidation: writeJobValidation,
   writeSwarmKill: writeJobKill,

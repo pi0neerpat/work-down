@@ -259,8 +259,17 @@ function ChatView({ sessionId, repoName, waitingForSession = false }) {
   )
 }
 
-function RawConsoleView({ termRef }) {
-  return <div ref={termRef} className="h-full w-full" style={{ padding: '4px', overflow: 'hidden' }} />
+function RawConsoleView({ termRef, plainOutput }) {
+  return (
+    <div className="h-full w-full flex flex-col">
+      {plainOutput && (
+        <div className="px-3 py-1.5 text-[11px] text-muted-foreground bg-card border-b border-border shrink-0">
+          Headless mode — final response appears when the run completes. See the <strong>Review</strong> tab for live progress.
+        </div>
+      )}
+      <div ref={termRef} className="flex-1 min-h-0 w-full" style={{ padding: '4px', overflow: 'hidden' }} />
+    </div>
+  )
 }
 
 function TerminalInstance({
@@ -423,7 +432,7 @@ function TerminalInstance({
       )}
 
       <div className="flex-1 min-h-0">
-        <RawConsoleView termRef={termRef} />
+        <RawConsoleView termRef={termRef} plainOutput={taskInfo?.plainOutput} />
       </div>
     </div>
   )

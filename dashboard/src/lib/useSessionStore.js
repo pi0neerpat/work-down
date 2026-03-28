@@ -49,6 +49,7 @@ export function useSessionStore() {
           ptySessionId: s.id,
           alive: s.alive !== false,
           serverStarted: s.serverStarted === true,
+          plainOutput: s.plainOutput === true ? true : (existing.plainOutput ?? false),
           launchToken: existing.launchToken || null,
           promptSent: existing.promptSent ?? true,
         }

@@ -74,7 +74,7 @@ function AgentCard({ agentId, label, icon: Icon, agentSettings, onUpdate, showMa
           <div>
             <span className="text-[12px] text-foreground/80">TUI Mode</span>
             <p className="text-[10px] text-muted-foreground/50">
-              {agentId === 'claude' ? 'Off: adds -p, runs headless' : 'Off: adds --quiet, runs headless'}
+              {agentId === 'claude' ? 'Off: adds -p --output-format text' : 'Off: adds --quiet, runs headless'}
             </p>
           </div>
         </div>

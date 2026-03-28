@@ -202,8 +202,8 @@ export default function JobsView({
                           <p className="text-[13px] font-medium text-foreground truncate">{worker.label}</p>
                           <div className="flex items-center gap-2 mt-0.5">
                             <span
-                              className="text-[10px] font-medium capitalize"
-                              style={{ color: repoColor }}
+                              className="text-[9px] px-1.5 py-0.5 rounded-full border font-medium capitalize"
+                              style={{ background: `${repoColor}10`, color: repoColor, borderColor: `${repoColor}30` }}
                             >
                               {worker.repo}
                             </span>

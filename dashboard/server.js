@@ -22,7 +22,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const {
   parseTaskFile, parseActivityLog, getGitInfo, parseJobFile, parseJobDir, loadConfig,
   writeTaskDone, writeTaskDoneByText, writeTaskReopenByText, writeTaskAdd, writeTaskEdit, writeTaskMove,
-  writeActivityEntry, writeJobValidation, writeJobKill, writeJobStatus,
+  writeActivityEntry, writeJobValidation, writeJobKill, writeJobStatus, writeJobResults,
   createCheckpoint, revertCheckpoint, dismissCheckpoint, listCheckpoints,
 } = require('../parsers')
 
@@ -253,13 +253,16 @@ function buildTrackedClaudeCommand({
   if (skipPermissions) flags += ' --dangerously-skip-permissions'
   if (model) flags += ` --model ${shellQuote(model)}`
   if (maxTurns) flags += ` --max-turns ${shellQuote(maxTurns)}`
-  if (plainOutput) flags += ' -p'
+  if (plainOutput) flags += ' -p --output-format text'
   if (extraFlags) flags += ` ${extraFlags}`
   const envPrefix = buildClaudeEnvPrefix({ sessionId, jobId, repoName })
   const claudeCommand = resumeId
     ? `${envPrefix}${buildResumeClaudeCommand(resumeId, flags)}`
     : `${envPrefix}claude${flags} "$(cat ${shellQuote(promptFilePath)})"`
-  return `${claudeCommand}; __hub_code=$?; echo "__HUB_CLAUDE_EXIT_CODE:\${__hub_code}__"; exit $__hub_code`
+  const withExit = `${claudeCommand}; __hub_code=$?; echo "__HUB_CLAUDE_EXIT_CODE:\${__hub_code}__"; exit $__hub_code`
+  // In plain output mode, wrap with sentinels so the server can capture Claude's
+  // text response and write it to the job file's ## Results section.
+  return plainOutput ? `echo '__HUB_OUTPUT_START__'; ${withExit}` : withExit
 }
 
 function buildTrackedCodexCommand({
@@ -546,6 +549,7 @@ function buildCanonicalSessionState() {
       label: canonicalAgent?.taskName || initAgent?.taskName || 'Manual worker',
       alive: Boolean(s.alive),
       serverStarted: Boolean(s.serverStarted),
+      plainOutput: Boolean(s.plainOutput),
     })
   }
 
@@ -1740,6 +1744,7 @@ function createPtySession(sessionId, cwd, repoName, jobFilePath, initialScrollba
     suppressFinalize: false,
     commandExitCode: null,
     serverStarted: Boolean(launch || pendingLaunch),
+    plainOutput: Boolean(pendingLaunch?.plainOutput),
     pendingLaunch: pendingLaunch || null,
     launchStarted: Boolean(launch),
     resumeCommand: null,
@@ -1863,6 +1868,27 @@ function createPtySession(sessionId, cwd, repoName, jobFilePath, initialScrollba
       chunk = chunk.replace(/__HUB_CLAUDE_EXIT_CODE:\d+__/g, '')
     }
 
+    // Plain output mode: capture Claude's text response between sentinels
+    // and write to the job file's ## Results section when done.
+    if (session.plainOutput) {
+      if (chunk.includes('__HUB_OUTPUT_START__')) {
+        session.capturingPlainOutput = true
+        session.plainOutputBuffer = ''
+        chunk = chunk.replace(/[^\n]*__HUB_OUTPUT_START__[^\n]*\r?\n?/g, '')
+      }
+      if (session.capturingPlainOutput) {
+        if (exitMatch) {
+          const captured = (session.plainOutputBuffer || '').trim()
+          if (captured && session.jobFilePath && fs.existsSync(session.jobFilePath)) {
+            try { writeJobResults(session.jobFilePath, captured) } catch {}
+          }
+          session.capturingPlainOutput = false
+        } else {
+          session.plainOutputBuffer = (session.plainOutputBuffer || '') + stripAnsi(chunk)
+        }
+      }
+    }
+
     const stripped = stripAnsi(chunk)
     // Capture resume command emitted by Claude so the job can be resumed later.
     const cmdMatch = stripped.match(/(claude(?:\s+code)?\s+(?:resume|--resume)\s+(?:["'])?[A-Za-z0-9._:-]+(?:["'])?)/i)
@@ -1910,6 +1936,13 @@ function createPtySession(sessionId, cwd, repoName, jobFilePath, initialScrollba
   })
 
   ptySessions.set(sessionId, session)
+
+  // Auto-start pending launches so dispatched jobs don't wait for a terminal
+  // view to connect.  A short delay lets tmux finish initialising its shell.
+  if (pendingLaunch && !launch) {
+    setTimeout(() => startPendingLaunch(session), 500)
+  }
+
   return session
 }
 

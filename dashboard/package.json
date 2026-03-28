@@ -6,10 +6,10 @@
   "packageManager": "yarn@4.9.1",
   "scripts": {
     "postinstall": "cd node_modules/node-pty && npx node-gyp rebuild 2>/dev/null || true",
-    "dev": "concurrently \"node --watch server.js\" \"vite\"",
+    "dev": "concurrently \"node --watch server.js\" \"npx vite\"",
     "dev:server": "node --watch server.js",
-    "dev:client": "vite",
-    "build": "vite build",
+    "dev:client": "npx vite",
+    "build": "npx vite build",
     "start": "node server.js"
   },
   "dependencies": {

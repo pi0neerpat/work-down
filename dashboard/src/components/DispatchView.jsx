@@ -281,7 +281,7 @@ export default function DispatchView({ overview, onDispatch, initialRepo, initia
               <Toggle
                 checked={!plainOutput}
                 onChange={(val) => setPlainOutput(!val)}
-                title={isCodex ? 'TUI mode — off adds --quiet' : 'TUI mode — off adds -p (headless)'}
+                title={isCodex ? 'TUI mode — off adds --quiet' : 'TUI mode — off adds -p --output-format text'}
               />
             </div>
           </div>

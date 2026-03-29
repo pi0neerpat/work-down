@@ -1,3 +1,26 @@
+// ── Security / Threat Model ──────────────────────────────
+// This server is designed as a **single-user localhost tool**.
+//
+// Trust boundary:
+//   - Binds to 127.0.0.1 only — not reachable from the LAN.
+//   - CORS restricts HTTP API access to the dashboard's own origin.
+//   - WebSocket connections are validated against the same origin allowlist.
+//
+// If you need to expose this on a shared machine or LAN, you MUST add:
+//   1. Authentication on all HTTP and WebSocket routes.
+//   2. Per-user authorization for destructive operations (job control, merge,
+//      checkpoint, session management).
+//   3. TLS termination (reverse proxy or native).
+//
+// Input safety:
+//   - Route parameters (:id, :name) are validated via app.param middleware.
+//   - Job IDs, session IDs, resume IDs, branch names, and checkpoint IDs
+//     are validated against strict regexes before use.
+//   - Git operations use execFileSync with argument arrays, not shell strings.
+//   - The `extraFlags` field is restricted to an explicit allowlist.
+//   - Path containment checks prevent job file lookups from escaping notes/jobs.
+// ─────────────────────────────────────────────────────────
+
 import { createRequire } from 'module'
 import { execFileSync, execSync } from 'child_process'
 import express from 'express'
@@ -196,9 +219,43 @@ function shellQuote(value) {
   return `'${text.replace(/'/g, `'\"'\"'`)}'`
 }
 
+// ── Input validation ─────────────────────────────────────
+
+// Job IDs: YYYY-MM-DD-slug[-N] (alphanumeric, hyphens, dots)
+const VALID_JOB_ID_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,200}$/
+function isValidJobId(id) {
+  return typeof id === 'string' && VALID_JOB_ID_RE.test(id) && !id.includes('..')
+}
+
+// Checkpoint IDs: passed as the :id param after /checkpoint/ prefix
+// The full branch name is checkpoint/<id> where id is like YYYYMMDD-HHMMSS
+const VALID_CHECKPOINT_ID_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,100}$/
+function isValidCheckpointId(id) {
+  return typeof id === 'string' && VALID_CHECKPOINT_ID_RE.test(id) && !id.includes('..')
+}
+
+// Session IDs: session-<uuid>
+const VALID_SESSION_ID_RE = /^session-[a-f0-9-]{36}$/
+function isValidSessionId(id) {
+  return typeof id === 'string' && VALID_SESSION_ID_RE.test(id)
+}
+
+// Resume IDs: alphanumeric with dots, hyphens, colons, underscores
+const VALID_RESUME_ID_RE = /^[A-Za-z0-9._:-]{1,200}$/
+function isValidResumeId(id) {
+  return typeof id === 'string' && VALID_RESUME_ID_RE.test(id)
+}
+
+// Branch names: alphanumeric, dots, hyphens, forward slashes
+const VALID_BRANCH_RE = /^[a-zA-Z0-9._\-/]+$/
+function isValidBranchName(name) {
+  return typeof name === 'string' && VALID_BRANCH_RE.test(name) && !name.includes('..')
+}
+
 function buildResumeClaudeCommand(resumeId, flags = '') {
   const id = String(resumeId ?? '').trim()
   if (!id) return null
+  if (!isValidResumeId(id)) return null
   return `claude${flags} --resume "${id}"`
 }
 
@@ -236,6 +293,29 @@ function buildClaudeEnvPrefix({ sessionId = null, jobId = null, repoName = null 
   return `${Object.entries(envVars).map(([key, value]) => `${key}=${shellQuote(value)}`).join(' ')} `
 }
 
+// Allowlisted extra flags that may be passed through from the dashboard UI.
+// Each entry maps a flag name to whether it takes a value argument.
+const ALLOWED_EXTRA_FLAGS = new Map([
+  ['--verbose', false],
+  ['--no-color', false],
+])
+
+function sanitizeExtraFlags(raw) {
+  if (!raw || typeof raw !== 'string') return ''
+  const tokens = raw.trim().split(/\s+/)
+  const safe = []
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i]
+    const spec = ALLOWED_EXTRA_FLAGS.get(token)
+    if (spec === undefined) continue // not allowed — skip
+    safe.push(token)
+    if (spec && i + 1 < tokens.length) {
+      safe.push(shellQuote(tokens[++i]))
+    }
+  }
+  return safe.join(' ')
+}
+
 function buildTrackedClaudeCommand({
   promptFilePath = null,
   model = null,
@@ -254,7 +334,8 @@ function buildTrackedClaudeCommand({
   if (model) flags += ` --model ${shellQuote(model)}`
   if (maxTurns) flags += ` --max-turns ${shellQuote(maxTurns)}`
   if (plainOutput) flags += ' -p --output-format text'
-  if (extraFlags) flags += ` ${extraFlags}`
+  const sanitized = sanitizeExtraFlags(extraFlags)
+  if (sanitized) flags += ` ${sanitized}`
   const envPrefix = buildClaudeEnvPrefix({ sessionId, jobId, repoName })
   const claudeCommand = resumeId
     ? `${envPrefix}${buildResumeClaudeCommand(resumeId, flags)}`
@@ -279,7 +360,8 @@ function buildTrackedCodexCommand({
   let flags = plainOutput ? '--quiet' : ''
   if (skipPermissions) flags += ' --yolo'
   if (model) flags += ` --model ${shellQuote(model)}`
-  if (extraFlags) flags += ` ${extraFlags}`
+  const sanitizedCodex = sanitizeExtraFlags(extraFlags)
+  if (sanitizedCodex) flags += ` ${sanitizedCodex}`
   const envPrefix = buildClaudeEnvPrefix({ sessionId, jobId, repoName })
   const cmd = `cat ${shellQuote(promptFilePath)} | ${envPrefix}codex exec ${flags} -`
   return `${cmd}; __hub_code=$?; echo "__HUB_CLAUDE_EXIT_CODE:\${__hub_code}__"; exit $__hub_code`
@@ -298,40 +380,46 @@ function stripAnsi(str) {
 // ── Git worktree helpers ─────────────────────────────────
 
 function createJobWorktree(repoPath, jobId, baseBranch = 'main') {
+  if (!isValidJobId(jobId)) throw new Error(`Invalid job id: ${String(jobId).slice(0, 80)}`)
+  if (!isValidBranchName(baseBranch)) throw new Error(`Invalid base branch: ${String(baseBranch).slice(0, 80)}`)
   const branchName = `job/${jobId}`
   const worktreePath = path.join(WORKTREES_DIR, jobId)
+  // Path containment: worktree must stay inside WORKTREES_DIR
+  if (!path.resolve(worktreePath).startsWith(path.resolve(WORKTREES_DIR) + path.sep)) {
+    throw new Error('Worktree path escapes expected directory')
+  }
   fs.mkdirSync(WORKTREES_DIR, { recursive: true })
   // Create worktree with a new branch off baseBranch
-  execSync(
-    `git -C ${shellQuote(repoPath)} worktree add ${shellQuote(worktreePath)} -b ${shellQuote(branchName)} ${shellQuote(baseBranch)}`,
-    { encoding: 'utf8', stdio: 'pipe' }
-  )
+  execFileSync('git', ['-C', repoPath, 'worktree', 'add', worktreePath, '-b', branchName, baseBranch], {
+    encoding: 'utf8', stdio: 'pipe',
+  })
   return { branchName, worktreePath }
 }
 
 function removeJobWorktree(repoPath, jobId, { deleteBranch = false } = {}) {
+  if (!isValidJobId(jobId)) return
   const worktreePath = path.join(WORKTREES_DIR, jobId)
+  // Path containment: worktree must stay inside WORKTREES_DIR
+  if (!path.resolve(worktreePath).startsWith(path.resolve(WORKTREES_DIR) + path.sep)) return
   const branchName = `job/${jobId}`
   try {
     if (fs.existsSync(worktreePath)) {
-      execSync(
-        `git -C ${shellQuote(repoPath)} worktree remove ${shellQuote(worktreePath)} --force`,
-        { encoding: 'utf8', stdio: 'pipe' }
-      )
+      execFileSync('git', ['-C', repoPath, 'worktree', 'remove', worktreePath, '--force'], {
+        encoding: 'utf8', stdio: 'pipe',
+      })
     }
   } catch (err) {
     // If worktree remove fails (e.g. already removed), clean up the directory manually
     console.warn(`[worktree] remove failed for ${jobId}: ${err.message}`)
     try { fs.rmSync(worktreePath, { recursive: true, force: true }) } catch {}
     // Prune stale worktree entries
-    try { execSync(`git -C ${shellQuote(repoPath)} worktree prune`, { stdio: 'pipe' }) } catch {}
+    try { execFileSync('git', ['-C', repoPath, 'worktree', 'prune'], { stdio: 'pipe' }) } catch {}
   }
   if (deleteBranch) {
     try {
-      execSync(
-        `git -C ${shellQuote(repoPath)} branch -D ${shellQuote(branchName)}`,
-        { encoding: 'utf8', stdio: 'pipe' }
-      )
+      execFileSync('git', ['-C', repoPath, 'branch', '-D', branchName], {
+        encoding: 'utf8', stdio: 'pipe',
+      })
     } catch { /* branch may already be deleted or merged */ }
   }
 }
@@ -365,8 +453,42 @@ function invalidateGitInfoCache(repoPath) {
 }
 
 const app = express()
-app.use(cors())
+// Only allow requests from the dashboard's own origin (localhost dev server or production)
+const ALLOWED_ORIGINS = new Set([
+  `http://localhost:${PORT}`,
+  `http://127.0.0.1:${PORT}`,
+  'http://localhost:5173',      // Vite dev server default
+  'http://127.0.0.1:5173',
+])
+app.use(cors({
+  origin(origin, callback) {
+    // Allow requests with no origin (same-origin, curl, server-to-server)
+    if (!origin || ALLOWED_ORIGINS.has(origin)) {
+      callback(null, true)
+    } else {
+      callback(new Error('CORS origin not allowed'))
+    }
+  },
+}))
 app.use(express.json())
+
+// ── Route parameter validation middleware ─────────────────
+// Reject requests with unsafe :id or :name params before they reach handlers.
+app.param('id', (req, res, next, value) => {
+  // Job IDs and checkpoint IDs share the same safe character set
+  if (!VALID_JOB_ID_RE.test(value) || value.includes('..')) {
+    return res.status(400).json({ error: `Invalid id parameter: ${value.slice(0, 80)}` })
+  }
+  next()
+})
+app.param('name', (req, res, next, value) => {
+  // Repo names: simple alphanumeric + hyphens/underscores
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,100}$/.test(value) || value.includes('..')) {
+    return res.status(400).json({ error: `Invalid name parameter: ${value.slice(0, 80)}` })
+  }
+  next()
+})
+
 let wss = null
 const JOB_EVENT = '\x01JOBS_CHANGED:'
 const LEGACY_SWARM_EVENT = '\x01SWARM_CHANGED:'
@@ -557,11 +679,16 @@ function buildCanonicalSessionState() {
 }
 
 app.get(['/api/jobs/:id', '/api/swarm/:id'], (req, res) => {
+  if (!isValidJobId(req.params.id)) {
+    return res.status(400).json({ error: 'Invalid job id' })
+  }
   const config = getConfig()
   for (const repo of config.repos) {
     for (const dirName of ['jobs', 'swarm']) {
       const jobsDir = path.join(repo.resolvedPath, 'notes', dirName)
       const filePath = path.join(jobsDir, `${req.params.id}.md`)
+      const resolved = path.resolve(filePath)
+      if (!resolved.startsWith(path.resolve(jobsDir) + path.sep)) continue
       if (fs.existsSync(filePath)) {
         const agent = parseJobFile(filePath)
         agent.repo = repo.name
@@ -1027,10 +1154,15 @@ app.post('/api/tasks/move', (req, res) => {
 })
 
 function findJobFileById(id, config = getConfig()) {
+  if (!isValidJobId(id)) return null
   for (const repo of config.repos) {
     for (const dirName of ['jobs', 'swarm']) {
       const jobsDir = path.join(repo.resolvedPath, 'notes', dirName)
       const filePath = path.join(jobsDir, `${id}.md`)
+      // Path containment: ensure the resolved path stays inside the expected directory
+      const resolved = path.resolve(filePath)
+      const resolvedDir = path.resolve(jobsDir)
+      if (!resolved.startsWith(resolvedDir + path.sep) && resolved !== resolvedDir) continue
       if (fs.existsSync(filePath)) return { repo, filePath }
     }
   }
@@ -1056,7 +1188,9 @@ function upsertHeaderLine(filePath, key, value) {
 function extractResumeId(resumeCommand) {
   if (!resumeCommand) return null
   const match = String(resumeCommand).match(/(?:resume|--resume)\s+(?:["'])?([A-Za-z0-9._:-]+)(?:["'])?/i)
-  return match ? match[1] : null
+  if (!match) return null
+  // Validate extracted resume ID before trusting it
+  return isValidResumeId(match[1]) ? match[1] : null
 }
 
 function markJobReadyForValidation({ jobId, sessionId = null, reason = 'stop_hook' } = {}) {
@@ -1115,15 +1249,15 @@ app.post(['/api/jobs/:id/resume', '/api/swarm/:id/resume'], (req, res) => {
   try {
     const detail = parseJobFile(found.filePath)
     const sessionId = detail.session || null
-    if (!sessionId) {
+    if (!sessionId || !isValidSessionId(sessionId)) {
       return res.status(409).json({
-        error: 'This job has no tracked terminal session to resume.',
+        error: 'This job has no valid tracked terminal session to resume.',
       })
     }
     const resumeId = detail.resumeId || extractResumeId(detail.resumeCommand)
-    if (!resumeId) {
+    if (!resumeId || !isValidResumeId(resumeId)) {
       return res.status(409).json({
-        error: 'No resume id is recorded for this job yet.',
+        error: 'No valid resume id is recorded for this job yet.',
       })
     }
     const skipPermissions = detail.skipPermissions == null ? true : detail.skipPermissions === true
@@ -1216,6 +1350,12 @@ app.post('/api/hooks/stop-ready', (req, res) => {
   const { sessionId, jobId, reason } = req.body || {}
   if (!sessionId || !jobId) {
     return res.status(400).json({ error: 'sessionId and jobId required' })
+  }
+  if (!isValidSessionId(sessionId)) {
+    return res.status(400).json({ error: 'Invalid sessionId format' })
+  }
+  if (!isValidJobId(jobId)) {
+    return res.status(400).json({ error: 'Invalid jobId format' })
   }
   const result = markJobReadyForValidation({ sessionId, jobId, reason: reason || 'stop_hook' })
   return res.status(result.status).json(result.body)
@@ -1590,8 +1730,9 @@ if (fs.existsSync(distDir)) {
   })
 }
 
-const server = app.listen(PORT, () => {
-  console.log(`Hub dashboard API running at http://localhost:${PORT}`)
+const BIND_HOST = '127.0.0.1'
+const server = app.listen(PORT, BIND_HOST, () => {
+  console.log(`Hub dashboard API running at http://${BIND_HOST}:${PORT}`)
 })
 
 // ── Persistent PTY sessions ──────────────────────────────
@@ -2073,14 +2214,37 @@ app.delete('/api/sessions/:id/purge', (req, res) => {
 })
 
 // ── WebSocket terminal server ────────────────────────────
-wss = new WebSocketServer({ server, path: '/ws/terminal' })
+wss = new WebSocketServer({
+  server,
+  path: '/ws/terminal',
+  verifyClient({ req }, done) {
+    const origin = req.headers.origin || ''
+    // Allow connections with no origin (non-browser clients, curl, server hooks)
+    if (!origin || ALLOWED_ORIGINS.has(origin)) {
+      done(true)
+    } else {
+      done(false, 403, 'WebSocket origin not allowed')
+    }
+  },
+})
 
 wss.on('connection', (ws, req) => {
   const url = new URL(req.url, `http://${req.headers.host}`)
   const repoName = url.searchParams.get('repo')
   const sessionId = url.searchParams.get('session')
   const jobFilePath = url.searchParams.get('jobFile') || url.searchParams.get('swarmFile')
+
+  // Validate session ID if provided
+  if (sessionId && !isValidSessionId(sessionId)) {
+    try { ws.close(1008, 'Invalid session id') } catch {}
+    return
+  }
+  // Validate job file path component if provided
   const jobIdFromPath = getJobIdFromPath(jobFilePath)
+  if (jobIdFromPath && !isValidJobId(jobIdFromPath)) {
+    try { ws.close(1008, 'Invalid job file path') } catch {}
+    return
+  }
 
   let session
 

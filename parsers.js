@@ -5,7 +5,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 
 function parseTaskFile(filePath) {
   const sections = [];
@@ -93,12 +93,12 @@ function parseActivityLog(filePath, options = {}) {
 function getGitInfo(repoPath) {
   const opts = { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 5000 }
   try {
-    const branch = execSync(`git -C "${repoPath}" branch --show-current`, opts).trim();
-    const porcelain = execSync(`git -C "${repoPath}" status --porcelain`, opts).trim();
+    const branch = execFileSync('git', ['-C', repoPath, 'branch', '--show-current'], opts).trim();
+    const porcelain = execFileSync('git', ['-C', repoPath, 'status', '--porcelain'], opts).trim();
     const dirtyCount = porcelain ? porcelain.split('\n').length : 0;
     let branches = [];
     try {
-      const raw = execSync(`git -C "${repoPath}" branch --format="%(refname:short)"`, opts).trim();
+      const raw = execFileSync('git', ['-C', repoPath, 'branch', '--format=%(refname:short)'], opts).trim();
       if (raw) branches = raw.split('\n').filter(Boolean);
     } catch { /* ignore */ }
     return { branch, dirtyCount, branches };
@@ -658,9 +658,9 @@ function writeJobResults(filePath, text) {
  * Returns { checkpointId, originalBranch, filesStashed }.
  */
 function createCheckpoint(repoPath) {
-  const git = (cmd) => execSync(`git -C "${repoPath}" ${cmd}`, { encoding: 'utf8' }).trim();
+  const git = (...args) => execFileSync('git', ['-C', repoPath, ...args], { encoding: 'utf8' }).trim();
 
-  const originalBranch = git('branch --show-current');
+  const originalBranch = git('branch', '--show-current');
   if (originalBranch.startsWith('checkpoint/')) {
     throw new Error('already on a checkpoint branch');
   }
@@ -669,13 +669,13 @@ function createCheckpoint(repoPath) {
   const checkpointId = `checkpoint/${timestamp}`;
 
   // Count files that will be captured
-  git(`checkout -b "${checkpointId}"`);
-  git('add -A');
-  const porcelain = git('status --porcelain');
+  git('checkout', '-b', checkpointId);
+  git('add', '-A');
+  const porcelain = git('status', '--porcelain');
   const filesStashed = porcelain ? porcelain.split('\n').length : 0;
 
-  git(`commit --allow-empty -m "Checkpoint: ${timestamp}\n\nOriginal branch: ${originalBranch}\nFiles captured: ${filesStashed}"`);
-  git(`checkout "${originalBranch}"`);
+  git('commit', '--allow-empty', '-m', `Checkpoint: ${timestamp}\n\nOriginal branch: ${originalBranch}\nFiles captured: ${filesStashed}`);
+  git('checkout', originalBranch);
 
   return { checkpointId, originalBranch, filesStashed };
 }
@@ -685,31 +685,31 @@ function createCheckpoint(repoPath) {
  * Returns { checkpointId, filesRestored, filesDiscarded }.
  */
 function revertCheckpoint(repoPath, checkpointId) {
-  const git = (cmd) => execSync(`git -C "${repoPath}" ${cmd}`, { encoding: 'utf8' }).trim();
+  const git = (...args) => execFileSync('git', ['-C', repoPath, ...args], { encoding: 'utf8' }).trim();
 
   // Ensure full branch name
   const branchName = checkpointId.startsWith('checkpoint/') ? checkpointId : `checkpoint/${checkpointId}`;
 
-  const exists = git(`branch --list "${branchName}"`);
+  const exists = git('branch', '--list', branchName);
   if (!exists) {
     throw new Error(`checkpoint branch "${branchName}" not found`);
   }
 
   // Count files being discarded
-  const currentPorcelain = git('status --porcelain');
+  const currentPorcelain = git('status', '--porcelain');
   const filesDiscarded = currentPorcelain ? currentPorcelain.split('\n').length : 0;
 
   // Discard all current changes
-  git('checkout -- .');
-  try { git('clean -fd'); } catch { /* no untracked files */ }
+  git('checkout', '--', '.');
+  try { git('clean', '-fd'); } catch { /* no untracked files */ }
 
   // Restore checkpoint files
-  git(`checkout "${branchName}" -- .`);
-  const restoredPorcelain = git('status --porcelain');
+  git('checkout', branchName, '--', '.');
+  const restoredPorcelain = git('status', '--porcelain');
   const filesRestored = restoredPorcelain ? restoredPorcelain.split('\n').length : 0;
 
   // Delete the checkpoint branch
-  git(`branch -D "${branchName}"`);
+  git('branch', '-D', branchName);
 
   return { checkpointId: branchName, filesRestored, filesDiscarded };
 }
@@ -719,16 +719,16 @@ function revertCheckpoint(repoPath, checkpointId) {
  * Returns { checkpointId }.
  */
 function dismissCheckpoint(repoPath, checkpointId) {
-  const git = (cmd) => execSync(`git -C "${repoPath}" ${cmd}`, { encoding: 'utf8' }).trim();
+  const git = (...args) => execFileSync('git', ['-C', repoPath, ...args], { encoding: 'utf8' }).trim();
 
   const branchName = checkpointId.startsWith('checkpoint/') ? checkpointId : `checkpoint/${checkpointId}`;
 
-  const exists = git(`branch --list "${branchName}"`);
+  const exists = git('branch', '--list', branchName);
   if (!exists) {
     throw new Error(`checkpoint branch "${branchName}" not found`);
   }
 
-  git(`branch -D "${branchName}"`);
+  git('branch', '-D', branchName);
   return { checkpointId: branchName };
 }
 
@@ -737,9 +737,9 @@ function dismissCheckpoint(repoPath, checkpointId) {
  * Returns array of { id, created, filesStashed, originalBranch }.
  */
 function listCheckpoints(repoPath) {
-  const git = (cmd) => execSync(`git -C "${repoPath}" ${cmd}`, { encoding: 'utf8' }).trim();
+  const git = (...args) => execFileSync('git', ['-C', repoPath, ...args], { encoding: 'utf8' }).trim();
 
-  const raw = git('branch --list "checkpoint/*"');
+  const raw = git('branch', '--list', 'checkpoint/*');
   if (!raw) return [];
 
   const branches = raw.split('\n').map(b => b.trim().replace(/^\* /, ''));
@@ -747,10 +747,10 @@ function listCheckpoints(repoPath) {
 
   for (const branch of branches) {
     try {
-      const msg = git(`log -1 --format=%B "${branch}"`);
+      const msg = git('log', '-1', '--format=%B', branch);
       const originalMatch = msg.match(/Original branch:\s*(.+)/);
       const filesMatch = msg.match(/Files captured:\s*(\d+)/);
-      const dateStr = git(`log -1 --format=%aI "${branch}"`);
+      const dateStr = git('log', '-1', '--format=%aI', branch);
 
       checkpoints.push({
         id: branch,

@@ -129,8 +129,9 @@ export default function App() {
   const handleDispatch = useCallback(async ({ repo, taskText, originalTask, baseBranch, model, maxTurns, autoMerge, useWorktree, plainOutput, agent, planSlug }) => {
     const agentId = agent || 'claude'
     const skipPermissions = settings.agents[agentId]?.skipPermissions ?? true
-    await startTaskSession(taskText, repo, { originalTask, baseBranch, model, maxTurns, autoMerge, useWorktree, plainOutput, skipPermissions, agent: agentId, planSlug })
-  }, [startTaskSession, settings])
+    const sessionId = await startTaskSession(taskText, repo, { originalTask, baseBranch, model, maxTurns, autoMerge, useWorktree, plainOutput, skipPermissions, agent: agentId, planSlug })
+    openJobDetail(sessionId)
+  }, [startTaskSession, openJobDetail, settings])
 
   const handleResumeJob = useCallback(async (jobId) => {
     const sessionId = await resumeJobSession(jobId)
@@ -190,6 +191,7 @@ export default function App() {
         onResumeJob={handleResumeJob}
         onRemoveSession={removeSession}
         showToast={showToast}
+        settings={settings}
       />
     </div>
   )
@@ -264,7 +266,8 @@ export default function App() {
                   <PlansView
                     overview={overview.data}
                     swarm={jobs.data}
-                    onNavigateToDispatch={handleNavigateToDispatch}
+                    onDispatch={handleDispatch}
+                    settings={settings}
                   />
                 </ScrollableView>
               } />

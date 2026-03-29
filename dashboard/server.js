@@ -25,6 +25,7 @@ const {
   writeActivityEntry, writeJobValidation, writeJobKill, writeJobStatus, writeJobResults,
   createCheckpoint, revertCheckpoint, dismissCheckpoint, listCheckpoints,
   writePlanDispatch,
+  writePlanStatus,
 } = require('../parsers')
 
 const HUB_DIR = path.resolve(__dirname, '..')
@@ -277,8 +278,8 @@ function buildTrackedCodexCommand({
   extraFlags = '',
 } = {}) {
   if (!promptFilePath) return null
-  let flags = plainOutput ? '--quiet' : ''
-  if (skipPermissions) flags += ' --yolo'
+  let flags = plainOutput ? '--color never' : ''
+  if (skipPermissions) flags += ' --dangerously-bypass-approvals-and-sandbox'
   if (model) flags += ` --model ${shellQuote(model)}`
   if (extraFlags) flags += ` ${extraFlags}`
   const envPrefix = buildClaudeEnvPrefix({ sessionId, jobId, repoName })
@@ -340,7 +341,7 @@ function removeJobWorktree(repoPath, jobId, { deleteBranch = false } = {}) {
 try {
   loadConfig(HUB_DIR)
 } catch (err) {
-  console.error('Failed to load hub/config.json:', err.message)
+  console.error('Failed to load config.local.json or config.json:', err.message)
   process.exit(1)
 }
 
@@ -482,6 +483,7 @@ app.get(['/api/jobs', '/api/swarm'], (req, res) => {
       id: a.id,
       repo: a.repo,
       taskName: a.taskName,
+      agent: a.agent || 'claude',
       started: a.started,
       status: a.status,
       validation: a.validation,
@@ -538,6 +540,7 @@ function buildCanonicalSessionState() {
     sessions.push({
       id,
       repo: canonicalAgent?.repo || initAgent?.repo || s.repo,
+      agent: canonicalAgent?.agent || initAgent?.agent || s.pendingLaunch?.agent || 'claude',
       created: s.created,
       summary: s.eventStore?.summary || null,
       eventCount: s.eventStore?.events?.length || 0,
@@ -680,7 +683,29 @@ app.put('/api/plans/:repoName/:slug', express.json(), (req, res) => {
   if (typeof content !== 'string') return res.status(400).json({ error: 'content required' })
   const plansDir = path.join(repo.resolvedPath, 'plans')
   fs.mkdirSync(plansDir, { recursive: true })
-  fs.writeFileSync(path.join(plansDir, `${req.params.slug}.md`), content, 'utf8')
+  const filePath = path.join(plansDir, `${req.params.slug}.md`)
+  // Re-inject any metadata lines (Dispatched/Job/Status) that were stripped for editing
+  const metaLines = []
+  if (fs.existsSync(filePath)) {
+    for (const line of fs.readFileSync(filePath, 'utf8').split('\n')) {
+      if (line.startsWith('# ')) break
+      if (line.match(/^(Dispatched|Job|Status):\s*/)) metaLines.push(line)
+    }
+  }
+  const finalContent = metaLines.length > 0 ? `${metaLines.join('\n')}\n${content}` : content
+  fs.writeFileSync(filePath, finalContent, 'utf8')
+  res.json({ ok: true })
+})
+
+app.post('/api/plans/:repoName/:slug/status', express.json(), (req, res) => {
+  const config = getConfig()
+  const repo = config.repos.find(r => r.name === req.params.repoName)
+  if (!repo) return res.status(404).json({ error: 'Repo not found' })
+  const filePath = path.join(repo.resolvedPath, 'plans', `${req.params.slug}.md`)
+  if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Plan not found' })
+  const { status } = req.body || {}
+  // status = 'ready' to set, null/undefined to clear
+  writePlanStatus(filePath, status || null)
   res.json({ ok: true })
 })
 
@@ -791,7 +816,9 @@ app.post(['/api/jobs/init', '/api/swarm/init'], (req, res) => {
   fs.mkdirSync(jobsDir, { recursive: true })
 
   const { fileName, filePath } = allocateUniqueJobFile({ jobsDir, datePrefix: date, slug })
-  const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 19)
+  const _now = new Date()
+  const _pad = n => String(n).padStart(2, '0')
+  const timestamp = `${_now.getFullYear()}-${_pad(_now.getMonth()+1)}-${_pad(_now.getDate())} ${_pad(_now.getHours())}:${_pad(_now.getMinutes())}:${_pad(_now.getSeconds())}`
   const singleLine = (value) => String(value || '').replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim()
   const headerTaskText = singleLine(taskText)
   const headerOriginalTask = singleLine(originalTask || '')

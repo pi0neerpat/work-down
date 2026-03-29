@@ -18,7 +18,7 @@ function parseProgressEntry(entry) {
   const isoMatch = entry.match(/^\[(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?Z?)\]\s*(.*)/)
   if (isoMatch) {
     const raw = isoMatch[1].replace(' ', 'T')
-    const d = new Date(raw.endsWith('Z') ? raw : raw + 'Z')
+    const d = new Date(raw)
     if (!isNaN(d.getTime())) return { time: formatEntryTime(d), text: isoMatch[2] || entry }
   }
   const timeMatch = entry.match(/^\[(\d{1,2}:\d{2}(?::\d{2})?)\]\s*(.*)/)

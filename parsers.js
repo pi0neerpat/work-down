@@ -121,6 +121,7 @@ function parseJobFile(filePath) {
   const id = path.basename(filePath, '.md');
   let taskName = '', started = '', status = 'unknown', validation = 'none', agentId = null, skills = [];
   let originalTask = '', session = null, repo = null;
+  let agent = 'claude';
   let skipPermissions = null;
   let resumeId = null, resumeCommand = null;
   let ai = null;
@@ -162,6 +163,9 @@ function parseJobFile(filePath) {
 
       const sessionMatch = line.match(/^Session:\s*(.+)/);
       if (sessionMatch) { session = sessionMatch[1].trim(); continue; }
+
+      const agentMatch = line.match(/^Agent:\s*(.+)/);
+      if (agentMatch) { agent = agentMatch[1].trim().toLowerCase() || 'claude'; continue; }
 
       const skipPermissionsMatch = line.match(/^SkipPermissions:\s*(.+)/);
       if (skipPermissionsMatch) {
@@ -223,6 +227,7 @@ function parseJobFile(filePath) {
 
   return {
     id, taskName, started, status, validation, agentId, skills,
+    agent,
     originalTask, session, skipPermissions, resumeId, resumeCommand, repo,
     branch, worktreePath,
     lastProgress, progressCount, durationMinutes, resultsSummary,
@@ -980,21 +985,41 @@ function parsePlansDir(dirPath) {
       // Parse metadata lines that appear before the first # heading
       let dispatched = null;
       let jobSlug = null;
+      let planStatus = null;
       for (const line of content.split('\n')) {
         if (line.startsWith('# ')) break;
         const dm = line.match(/^Dispatched:\s*(.+)/);
         if (dm) dispatched = dm[1].trim();
         const jm = line.match(/^Job:\s*(.+)/);
         if (jm) jobSlug = jm[1].trim();
+        const sm = line.match(/^Status:\s*(.+)/);
+        if (sm) planStatus = sm[1].trim();
       }
       const titleMatch = content.match(/^#\s+(.+)/m)
       const title = titleMatch
         ? titleMatch[1].trim()
         : slug.replace(/^\d{4}-\d{2}-\d{2}-/, '').replace(/-/g, ' ')
-      plans.push({ slug, title, content, lastModified: stat.mtime.toISOString(), dispatched, jobSlug })
+      plans.push({ slug, title, content, lastModified: stat.mtime.toISOString(), dispatched, jobSlug, planStatus })
     }
   } catch { /* dir unreadable */ }
   return plans
+}
+
+function writePlanStatus(filePath, status) {
+  let content = '';
+  try { content = fs.readFileSync(filePath, 'utf8'); } catch {}
+  // Remove existing Status: line
+  const lines = content.split('\n').filter(l => !l.match(/^Status:\s*/));
+  if (status) {
+    // Insert after other metadata lines, before first # heading
+    let insertAt = 0;
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].match(/^(Dispatched|Job):\s*/)) { insertAt = i + 1; }
+      else if (lines[i].startsWith('# ')) break;
+    }
+    lines.splice(insertAt, 0, `Status: ${status}`);
+  }
+  fs.writeFileSync(filePath, lines.join('\n'), 'utf8');
 }
 
 function writePlanDispatch(filePath, date, jobId) {
@@ -1014,6 +1039,7 @@ module.exports = {
   parseJobDir,
   parsePlansDir,
   writePlanDispatch,
+  writePlanStatus,
   // Legacy aliases for compatibility during migration
   parseSwarmFile: parseJobFile,
   parseSwarmDir: parseJobDir,

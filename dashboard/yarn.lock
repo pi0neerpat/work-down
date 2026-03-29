@@ -1454,7 +1454,7 @@ __metadata:
     cors: "npm:^2.8.5"
     express: "npm:^4.21.0"
     lucide-react: "npm:0.487.0"
-    node-pty: "npm:^1.0.0"
+    node-pty: "npm:^1.1.0"
     react: "npm:^18.3.1"
     react-dom: "npm:^18.3.1"
     react-markdown: "npm:^10.1.0"
@@ -3042,7 +3042,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"node-pty@npm:^1.0.0":
+"node-pty@npm:^1.1.0":
   version: 1.1.0
   resolution: "node-pty@npm:1.1.0"
   dependencies:

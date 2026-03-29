@@ -67,7 +67,7 @@ let config;
 try {
   config = loadConfig(HUB_DIR);
 } catch {
-  fail('hub/config.json not found or invalid');
+  fail('config.local.json or config.json not found or invalid');
 }
 
 // Gather repo data (lazy — only computed when needed)

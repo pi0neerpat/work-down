@@ -23,6 +23,7 @@ export default function JobDetailView({
   onResumeJob,
   onRemoveSession,
   showToast,
+  settings,
 }) {
   const [view, setView] = useState('review')
 
@@ -132,6 +133,7 @@ export default function JobDetailView({
               onBack={onBack}
               onRemoveSession={() => onRemoveSession?.(jobId)}
               showToast={showToast}
+              settings={settings}
             />
           </div>
         </div>

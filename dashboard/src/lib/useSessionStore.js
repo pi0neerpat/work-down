@@ -127,6 +127,7 @@ export function useSessionStore() {
       next.set(sessionId, {
         taskText,
         repoName,
+        agent: dispatchOpts.agent || 'claude',
         jobFile,
         created: Date.now(),
         ptySessionId: sessionId,
@@ -148,7 +149,7 @@ export function useSessionStore() {
     const sessionId = makeSessionId()
     setAgentTerminals(prev => {
       const next = new Map(prev)
-      next.set(sessionId, { taskText: '', repoName, jobFile: null, created: Date.now(), alive: true, promptSent: false, launchToken: makeLaunchToken() })
+      next.set(sessionId, { taskText: '', repoName, agent: 'claude', jobFile: null, created: Date.now(), alive: true, promptSent: false, launchToken: makeLaunchToken() })
       return next
     })
     return sessionId
@@ -226,6 +227,7 @@ export function useSessionStore() {
       pendingLocal.push({
         id,
         repo: info.repoName || '',
+        agent: info.agent || 'claude',
         label: info.taskText || 'Manual worker',
         created: info.created || Date.now(),
         jobId: info.jobFile?.fileName?.replace(/\.md$/, '') || null,

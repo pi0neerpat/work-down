@@ -1,11 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
-import { Send, Bot, Sparkles } from 'lucide-react'
+import { Send, FileText, X } from 'lucide-react'
 import { cn } from '../lib/utils'
-import { repoIdentityColors, AGENT_OPTIONS } from '../lib/constants'
+import { repoIdentityColors } from '../lib/constants'
 import { useAgentModels } from '../lib/useAgentModels'
-import Toggle from './Toggle'
-
-const AGENT_ICONS = { claude: Bot, codex: Sparkles }
+import DispatchSettingsRow from './DispatchSettingsRow'
 
 function readSaved() {
   try { return JSON.parse(localStorage.getItem('dispatch-settings')) || {} }
@@ -32,12 +30,14 @@ export default function DispatchView({ overview, onDispatch, initialRepo, initia
   const [agent, setAgent] = useState(s.agent || 'claude')
   const [repo, setRepo] = useState(initialRepo || s.repo || repos[0]?.name || '')
   const [baseBranch, setBaseBranch] = useState('')
-  const [prompt, setPrompt] = useState(initialPrompt || '')
+  const [prompt, setPrompt] = useState(initialPrompt ?? s.prompt ?? '')
   const [autoMerge, setAutoMerge] = useState(s.autoMerge ?? false)
   const [useWorktree, setUseWorktree] = useState(s.useWorktree ?? false)
   const [plainOutput, setPlainOutput] = useState(s.plainOutput ?? !(agentSettings[s.agent || 'claude']?.tuiMode ?? true))
+  const [planSlug, setPlanSlug] = useState(initialPlanSlug || null)
   const [dispatching, setDispatching] = useState(false)
   const [btnPhase, setBtnPhase] = useState('idle') // idle | shaking | sliding | hidden | returning
+  const [dispatchError, setDispatchError] = useState(null)
 
   const isCodex = agent === 'codex'
   const models = useAgentModels(agent)
@@ -47,10 +47,10 @@ export default function DispatchView({ overview, onDispatch, initialRepo, initia
     s.model || agentSettings[s.agent || 'claude']?.defaultModel || ''
   )
 
-  // Turns: restore saved, else use settings default
+  // Turns: always use settings default (not persisted across dispatches)
   const [maxTurns, setMaxTurns] = useState(() => {
-    if (s.maxTurns != null) return s.maxTurns
-    return agentSettings[s.agent || 'claude']?.defaultMaxTurns ?? 10
+    const cfg = agentSettings[s.agent || 'claude'] || {}
+    return 'defaultMaxTurns' in cfg ? cfg.defaultMaxTurns : 10
   })
 
   // When models list loads and current model isn't in it, snap to first
@@ -66,34 +66,52 @@ export default function DispatchView({ overview, onDispatch, initialRepo, initia
     setAgent(newAgent)
     const defaults = agentSettings[newAgent] || {}
     const newModel = defaults.defaultModel || ''
-    const newTurns = defaults.defaultMaxTurns ?? (newAgent === 'claude' ? 10 : null)
+    const newTurns = 'defaultMaxTurns' in defaults ? defaults.defaultMaxTurns : (newAgent === 'claude' ? 10 : null)
     const newPlainOutput = !(defaults.tuiMode ?? true)
     setModel(newModel)
     setMaxTurns(newTurns)
     setPlainOutput(newPlainOutput)
-    writeSaved({ agent: newAgent, model: newModel, maxTurns: newTurns, plainOutput: newPlainOutput })
+    writeSaved({ agent: newAgent, model: newModel, plainOutput: newPlainOutput })
   }
 
   // Persist individual fields immediately on change
   useEffect(() => { writeSaved({ agent }) }, [agent])
   useEffect(() => { writeSaved({ repo }) }, [repo])
   useEffect(() => { writeSaved({ model }) }, [model])
-  useEffect(() => { writeSaved({ maxTurns }) }, [maxTurns])
   useEffect(() => { writeSaved({ autoMerge }) }, [autoMerge])
   useEffect(() => { writeSaved({ useWorktree }) }, [useWorktree])
   useEffect(() => { writeSaved({ plainOutput }) }, [plainOutput])
+  useEffect(() => { writeSaved({ prompt }) }, [prompt])
+
+  // Set default repo once repos load (overview may not be ready on first render)
+  useEffect(() => {
+    if (repos.length > 0 && (!repo || !repos.find(r => r.name === repo))) {
+      const defaultRepo = repos.find(r => r.name === s.repo) || repos[0]
+      if (defaultRepo) setRepo(defaultRepo.name)
+    }
+  }, [repos])
 
   // Apply pre-fill when props change
   useEffect(() => { if (initialRepo) setRepo(initialRepo) }, [initialRepo])
   useEffect(() => { if (initialPrompt) setPrompt(initialPrompt) }, [initialPrompt])
+  useEffect(() => { setPlanSlug(initialPlanSlug || null) }, [initialPlanSlug])
 
   const selectedRepo = repos.find(r => r.name === repo)
   const defaultBranch = selectedRepo?.git?.branch || 'main'
   const branchOptions = selectedRepo?.git?.branches || []
 
+  const isReady = repo && (planSlug || prompt.trim())
+
   async function handleDispatch(e) {
     e.preventDefault()
-    if (!prompt.trim() || !repo || btnPhase !== 'idle') return
+    if (!isReady || btnPhase !== 'idle') return
+    setDispatchError(null)
+
+    // Assemble final task text: plan path first, then any extra instructions
+    const planPath = planSlug ? `plans/${planSlug}.md` : null
+    const taskText = planPath
+      ? (prompt.trim() ? `${planPath}\n\n${prompt.trim()}` : planPath)
+      : prompt.trim()
 
     // Kick off button animation — disable only after content slides out
     setBtnPhase('shaking')
@@ -104,7 +122,7 @@ export default function DispatchView({ overview, onDispatch, initialRepo, initia
     try {
       await onDispatch?.({
         repo,
-        taskText: prompt.trim(),
+        taskText,
         originalTask: initialPrompt || null,
         baseBranch: baseBranch.trim() || defaultBranch,
         model,
@@ -113,12 +131,15 @@ export default function DispatchView({ overview, onDispatch, initialRepo, initia
         useWorktree,
         plainOutput,
         agent,
-        planSlug: initialPlanSlug || undefined,
+        planSlug: planSlug || undefined,
       })
       setPrompt('')
       onDispatchComplete?.()
     } catch (err) {
       console.error('Dispatch failed:', err)
+      setBtnPhase('idle')
+      setDispatchError(err.message)
+      return
     } finally {
       setDispatching(false)
       setTimeout(() => setBtnPhase('returning'), 1800)
@@ -158,7 +179,7 @@ export default function DispatchView({ overview, onDispatch, initialRepo, initia
           </div>
         </div>
 
-        {/* Branch + Worktree row */}
+        {/* Branch row */}
         <div className="flex items-end gap-3">
           <div className="w-44 shrink-0">
             <label htmlFor="dispatch-branch" className="block text-[11px] font-medium text-muted-foreground mb-1">
@@ -179,26 +200,43 @@ export default function DispatchView({ overview, onDispatch, initialRepo, initia
               )}
             </select>
           </div>
+        </div>
 
+        {/* Plan chip */}
+        {planSlug && (
           <div>
-            <label className="block text-[11px] font-medium text-muted-foreground mb-1">Worktree</label>
-            <div className="h-8 flex items-center">
-              <Toggle checked={useWorktree} onChange={setUseWorktree} title="Run in an isolated git worktree" />
+            <label className="block text-[11px] font-medium text-muted-foreground mb-1">Plan</label>
+            <div className="inline-flex items-center gap-2 h-8 pl-2.5 pr-2 rounded-md border border-border bg-card max-w-full">
+              <FileText size={12} className="text-muted-foreground/60 shrink-0" />
+              <span
+                className="text-[12px] text-foreground/70 truncate"
+                style={{ fontFamily: 'var(--font-mono)' }}
+              >
+                plans/{planSlug}.md
+              </span>
+              <button
+                type="button"
+                onClick={() => setPlanSlug(null)}
+                className="ml-1 text-muted-foreground/40 hover:text-muted-foreground transition-colors shrink-0"
+                title="Remove plan reference"
+              >
+                <X size={12} />
+              </button>
             </div>
           </div>
-        </div>
+        )}
 
         {/* Prompt */}
         <div>
           <label htmlFor="dispatch-prompt" className="block text-[11px] font-medium text-muted-foreground mb-1">
-            Task Prompt
+            {planSlug ? 'Additional Instructions' : 'Task Prompt'}
           </label>
           <textarea
             id="dispatch-prompt"
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
-            placeholder="Describe the task for the worker..."
-            rows={4}
+            placeholder={planSlug ? 'Additional instructions (optional)...' : 'Describe the task for the worker...'}
+            rows={planSlug ? 3 : 4}
             className={cn(
               'w-full px-3 py-2 rounded-md border border-border bg-card',
               'text-[13px] text-foreground placeholder:text-muted-foreground/40 leading-relaxed',
@@ -208,91 +246,16 @@ export default function DispatchView({ overview, onDispatch, initialRepo, initia
           />
         </div>
 
-        {/* Agent + Model + Turns + Plain + Merge + Submit */}
-        <div className="flex items-start gap-3">
-          {/* Agent selector — vertical stack */}
-          <div>
-            <label className="block text-[11px] font-medium text-muted-foreground mb-1">Agent</label>
-            <div className="flex flex-col gap-1">
-              {AGENT_OPTIONS.map(opt => {
-                const Icon = AGENT_ICONS[opt.id] || Bot
-                const isSelected = agent === opt.id
-                return (
-                  <button
-                    key={opt.id}
-                    type="button"
-                    onClick={() => switchAgent(opt.id)}
-                    style={isSelected ? { color: '#8bab8f', borderColor: '#8bab8f40', backgroundColor: '#8bab8f18' } : undefined}
-                    className={cn(
-                      'flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[12px] font-medium border transition-colors',
-                      isSelected
-                        ? 'border-transparent'
-                        : 'border-border bg-card text-muted-foreground hover:text-foreground hover:bg-card-hover'
-                    )}
-                  >
-                    <Icon size={13} />
-                    {opt.label}
-                  </button>
-                )
-              })}
-            </div>
-          </div>
-
-          <div className="w-44">
-            <label htmlFor="dispatch-model" className="block text-[11px] font-medium text-muted-foreground mb-1">
-              Model
-            </label>
-            <select
-              id="dispatch-model"
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              className="w-full h-8 px-2.5 rounded-md border border-border bg-card text-[12px] text-foreground focus:outline-none focus:border-primary/30"
-            >
-              {models.map(opt => (
-                <option key={opt.value} value={opt.value}>{opt.label}</option>
-              ))}
-            </select>
-          </div>
-
-          <div className="w-20">
-            <label htmlFor="dispatch-turns" className="block text-[11px] font-medium text-muted-foreground mb-1">
-              Turns
-            </label>
-            <input
-              id="dispatch-turns"
-              type="number"
-              min={1}
-              max={200}
-              value={isCodex ? '' : (maxTurns ?? '')}
-              disabled={isCodex}
-              onChange={(e) => setMaxTurns(parseInt(e.target.value) || 10)}
-              placeholder={isCodex ? 'N/A' : '10'}
-              title={isCodex ? 'N/A for Codex' : undefined}
-              className={cn(
-                'w-full h-8 px-2.5 rounded-md border border-border bg-card text-[12px] text-foreground font-mono focus:outline-none focus:border-primary/30',
-                isCodex && 'opacity-40 cursor-not-allowed'
-              )}
-              style={{ fontFamily: 'var(--font-mono)' }}
-            />
-          </div>
-
-          <div>
-            <label className="block text-[11px] font-medium text-muted-foreground mb-1">TUI</label>
-            <div className="h-8 flex items-center">
-              <Toggle
-                checked={!plainOutput}
-                onChange={(val) => setPlainOutput(!val)}
-                title={isCodex ? 'TUI mode — off adds --quiet' : 'TUI mode — off adds -p --output-format text'}
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-[11px] font-medium text-muted-foreground mb-1">Auto-Merge</label>
-            <div className="h-8 flex items-center">
-              <Toggle checked={autoMerge} onChange={setAutoMerge} />
-            </div>
-          </div>
+        {/* Agent + Model + Turns + TUI + Auto-merge + Worktree + Submit */}
+        <div className="flex items-start gap-3 flex-wrap">
+          <DispatchSettingsRow
+            agent={agent} onSwitchAgent={switchAgent}
+            model={model} setModel={setModel} models={models}
+            maxTurns={maxTurns} setMaxTurns={setMaxTurns}
+            useWorktree={useWorktree} setUseWorktree={setUseWorktree}
+            autoMerge={autoMerge} setAutoMerge={setAutoMerge}
+            plainOutput={plainOutput} setPlainOutput={setPlainOutput}
+          />
 
           <div className="flex-1" />
 
@@ -308,14 +271,14 @@ export default function DispatchView({ overview, onDispatch, initialRepo, initia
                 btnPhase === 'returning' && 'animate-dispatch-btn-in',
               )}
               style={{
-                opacity: (!prompt.trim() || !repo) && btnPhase === 'idle' ? 0.4 : 1,
+                opacity: !isReady && btnPhase === 'idle' ? 0.4 : 1,
                 ...(btnPhase === 'hidden' && { transform: 'translateX(400px)' }),
               }}
             >
               {/* Glow layers — fade in when button is ready, out when disabled */}
               <div
                 className="absolute inset-0 pointer-events-none transition-opacity duration-500"
-                style={{ opacity: (prompt.trim() && repo) || btnPhase !== 'idle' ? 1 : 0 }}
+                style={{ opacity: isReady || btnPhase !== 'idle' ? 1 : 0 }}
               >
                 <div className="absolute pointer-events-none animate-loading-halo" style={{ width: '204px', height: '66px', background: '#8bab8f', borderRadius: '50%', filter: 'blur(35px)', top: 'calc(50% - 33px)', left: 'calc(50% - 102px)' }} />
                 <div className="absolute pointer-events-none animate-loading-glow" style={{ width: '108px', height: '38px', background: '#8bab8f', borderRadius: '50%', filter: 'blur(19px)', top: 'calc(50% - 19px)', left: 'calc(50% - 54px)' }} />
@@ -331,7 +294,7 @@ export default function DispatchView({ overview, onDispatch, initialRepo, initia
                     ? '0 0 18px 4px rgba(139,171,143,0.45)'
                     : '0 0 8px 2px rgba(139,171,143,0.18)',
                   transition: 'box-shadow 400ms ease',
-                  cursor: (!prompt.trim() || !repo) && btnPhase === 'idle' ? 'not-allowed' : 'pointer',
+                  cursor: !isReady && btnPhase === 'idle' ? 'not-allowed' : 'pointer',
                 }}
                 className={cn(
                   'inline-flex items-center gap-2.5 pl-5 pr-6 h-10 rounded-full text-[13px] font-semibold shrink-0 relative z-10',
@@ -345,6 +308,11 @@ export default function DispatchView({ overview, onDispatch, initialRepo, initia
           </div>
         </div>
       </form>
+      {dispatchError && (
+        <div className="mt-3 px-3 py-2 rounded-md border border-red-500/30 bg-red-500/10 text-[12px] text-red-400">
+          {dispatchError}
+        </div>
+      )}
     </div>
   )
 }

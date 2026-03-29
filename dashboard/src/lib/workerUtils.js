@@ -35,6 +35,7 @@ function buildSessionEntries(activeWorkers, sessionRecords) {
     return sessionRecords.map(s => ({
       sessionId: s.id,
       repo: s.repo || '',
+      agent: s.agent || 'claude',
       label: s.label || 'Manual worker',
       created: s.created || Date.now(),
       jobId: s.jobId || s.swarmFileName || null,
@@ -50,6 +51,7 @@ function buildSessionEntries(activeWorkers, sessionRecords) {
     return Array.from(activeWorkers.entries()).map(([sessionId, info]) => ({
       sessionId,
       repo: info.repoName || '',
+      agent: info.agent || 'claude',
       label: info.taskText || 'Manual worker',
       created: info.created || Date.now(),
       jobId: info.jobFile?.fileName?.replace(/\.md$/, '') || null,
@@ -87,6 +89,7 @@ function buildWorkerItemsCore(jobAgents, activeWorkers, jobFileToSession, sessio
       id: sessionId,
       isSession: true,
       repo: session.repo,
+      agent: session.agent || 'claude',
       label: session.label,
       needsReview: session.validation === 'needs_validation',
       status: session.status,
@@ -110,6 +113,7 @@ function buildWorkerItemsCore(jobAgents, activeWorkers, jobFileToSession, sessio
       id: sessionId || agent.id,
       isSession: !!sessionId,
       repo: agent.repo,
+      agent: agent.agent || 'claude',
       label: agent.taskName || agent.id,
       needsReview: agent.validation === 'needs_validation',
       status: agent.status,

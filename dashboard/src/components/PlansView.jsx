@@ -1,5 +1,7 @@
-import { useState, useEffect, useCallback } from 'react'
-import { ArrowLeft, Pencil, Check, Play } from 'lucide-react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { ArrowLeft, Pencil, Check, Play, AlertTriangle, RotateCcw, Wrench } from 'lucide-react'
+import { useAgentModels } from '../lib/useAgentModels'
+import DispatchSettingsRow from './DispatchSettingsRow'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { cn } from '../lib/utils'
@@ -15,6 +17,14 @@ function timeAgo(isoStr) {
   if (days < 30) return `${days}d ago`
   const months = Math.floor(days / 30)
   return `${months}mo ago`
+}
+
+function stripMetadata(content) {
+  return content
+    .split('\n')
+    .filter(l => !l.match(/^(Dispatched|Job|Status):\s*/))
+    .join('\n')
+    .replace(/^\n+/, '')
 }
 
 const JOB_STATUS_CHIP = {
@@ -33,7 +43,9 @@ function resolveJobStatus(plan, swarm) {
 function PlanCard({ plan, onSelect, swarm }) {
   const color = repoIdentityColors[plan.repo] || 'var(--primary)'
   const jobStatus = resolveJobStatus(plan, swarm)
-  const chip = jobStatus ? JOB_STATUS_CHIP[jobStatus] : null
+  // Job execution state takes priority; fall back to user-set readiness
+  const jobChip = jobStatus ? JOB_STATUS_CHIP[jobStatus] : null
+  const showReady = !jobChip && jobStatus !== 'dispatched' && plan.planStatus === 'ready'
 
   return (
     <button
@@ -44,22 +56,23 @@ function PlanCard({ plan, onSelect, swarm }) {
         <span className="flex-1 min-w-0 text-[13px] font-medium text-foreground truncate">
           {plan.title}
         </span>
-        {chip ? (
-          <span
-            className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium"
-            style={{ color: chip.color, background: `${chip.color}18` }}
-          >
-            {chip.label}
+        {jobChip ? (
+          <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium"
+            style={{ color: jobChip.color, background: `${jobChip.color}18` }}>
+            {jobChip.label}
           </span>
         ) : jobStatus === 'dispatched' ? (
           <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium text-muted-foreground border border-border">
             dispatched
           </span>
+        ) : showReady ? (
+          <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium"
+            style={{ color: '#8bab8f', background: '#8bab8f18' }}>
+            ready
+          </span>
         ) : null}
-        <span
-          className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium"
-          style={{ color, background: `${color}18` }}
-        >
+        <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium"
+          style={{ color, background: `${color}18` }}>
           {plan.repo}
         </span>
         <span className="shrink-0 text-[11px] text-muted-foreground/60 w-16 text-right">
@@ -70,13 +83,179 @@ function PlanCard({ plan, onSelect, swarm }) {
   )
 }
 
-function PlanDetail({ plan: initialPlan, onBack, onNavigateToDispatch }) {
+function readDispatchSaved() {
+  try { return JSON.parse(localStorage.getItem('dispatch-settings')) || {} } catch { return {} }
+}
+function writeDispatchSaved(patch) {
+  try {
+    const prev = readDispatchSaved()
+    localStorage.setItem('dispatch-settings', JSON.stringify({ ...prev, ...patch }))
+  } catch {}
+}
+
+function PlanDispatchBar({ plan, swarm, settings: appSettings, onDispatch }) {
+  const isFinished = ['completed', 'failed'].includes(resolveJobStatus(plan, swarm))
+
+  // Share state with dispatch-settings so preferences stay consistent across views
+  const saved = useRef(null)
+  if (!saved.current) { saved.current = readDispatchSaved() }
+  const s = saved.current
+  const agentSettings = appSettings?.agents || {}
+
+  const [agent, setAgentRaw] = useState(s.agent || 'claude')
+  const [model, setModelRaw] = useState(s.model || agentSettings[s.agent || 'claude']?.defaultModel || '')
+  const [maxTurns, setMaxTurnsRaw] = useState(() => {
+    const cfg = agentSettings[s.agent || 'claude'] || {}
+    return 'defaultMaxTurns' in cfg ? cfg.defaultMaxTurns : 10
+  })
+  const [useWorktree, setUseWorktreeRaw] = useState(s.useWorktree ?? false)
+  const [autoMerge, setAutoMergeRaw] = useState(s.autoMerge ?? false)
+  const [plainOutput, setPlainOutputRaw] = useState(s.plainOutput ?? !(agentSettings[s.agent || 'claude']?.tuiMode ?? true))
+  const models = useAgentModels(agent)
+
+  const [editInstructions, setEditInstructions] = useState('')
+  const [implementDispatching, setImplementDispatching] = useState(false)
+  const [editDispatching, setEditDispatching] = useState(false)
+
+  const setModel = v => { setModelRaw(v); writeDispatchSaved({ model: v }) }
+  const setMaxTurns = v => { setMaxTurnsRaw(v) }
+  const setUseWorktree = v => { setUseWorktreeRaw(v); writeDispatchSaved({ useWorktree: v }) }
+  const setAutoMerge = v => { setAutoMergeRaw(v); writeDispatchSaved({ autoMerge: v }) }
+  const setPlainOutput = v => { setPlainOutputRaw(v); writeDispatchSaved({ plainOutput: v }) }
+
+  function switchAgent(newAgent) {
+    const defaults = agentSettings[newAgent] || {}
+    const newModel = defaults.defaultModel || ''
+    const newTurns = 'defaultMaxTurns' in defaults ? defaults.defaultMaxTurns : (newAgent === 'claude' ? 10 : null)
+    const newPlainOutput = !(defaults.tuiMode ?? true)
+    setAgentRaw(newAgent); setModelRaw(newModel); setMaxTurnsRaw(newTurns); setPlainOutputRaw(newPlainOutput)
+    writeDispatchSaved({ agent: newAgent, model: newModel, plainOutput: newPlainOutput })
+  }
+
+  useEffect(() => {
+    if (models.length > 0 && !models.find(m => m.value === model)) {
+      const newModel = agentSettings[agent]?.defaultModel || models[0].value
+      setModel(newModel)
+    }
+  }, [models])
+
+  const isCodex = agent === 'codex'
+  const sharedSettings = {
+    agent, onSwitchAgent: switchAgent,
+    model, setModel, models,
+    maxTurns, setMaxTurns,
+    useWorktree, setUseWorktree,
+    autoMerge, setAutoMerge,
+    plainOutput, setPlainOutput,
+  }
+
+  async function handleImplement() {
+    setImplementDispatching(true)
+    try {
+      await onDispatch({
+        repo: plan.repo, taskText: `plans/${plan.slug}.md`,
+        agent, model, maxTurns: isCodex ? null : maxTurns,
+        useWorktree, autoMerge, plainOutput, planSlug: plan.slug,
+      })
+    } finally { setImplementDispatching(false) }
+  }
+
+  async function handleEdit() {
+    const basePrompt = 'Expand and refine this plan in place. Research any open questions, fill in implementation details, and update the file.'
+    const taskText = `plans/${plan.slug}.md\n\n${editInstructions.trim() || basePrompt}`
+    setEditDispatching(true)
+    try {
+      await onDispatch({
+        repo: plan.repo, taskText,
+        agent, model, maxTurns: isCodex ? null : maxTurns,
+        useWorktree, autoMerge, plainOutput, planSlug: plan.slug,
+      })
+    } finally { setEditDispatching(false) }
+  }
+
+  return (
+    <div className="border-t border-border pt-4 mt-2 flex flex-col gap-4">
+
+      {/* Shared settings */}
+      <div className="flex items-start gap-3 flex-wrap">
+        <DispatchSettingsRow {...sharedSettings} />
+      </div>
+
+      {/* Implement row */}
+      <div className="flex items-center justify-between pt-1 border-t border-border/50">
+        <span className="text-[11px] font-medium text-muted-foreground/60 uppercase tracking-wide">Implement</span>
+        <div className="flex items-center gap-2">
+          {isFinished && (
+            <button
+              onClick={handleImplement}
+              className="flex items-center gap-1.5 px-3 h-8 rounded-full text-[12px] font-medium border border-border bg-card text-muted-foreground hover:text-foreground hover:bg-card-hover transition-colors"
+            >
+              <RotateCcw size={12} />
+              Run again
+            </button>
+          )}
+          <div className="relative inline-flex items-center justify-center">
+            <div className="absolute pointer-events-none animate-loading-halo" style={{ width: '160px', height: '52px', background: '#8bab8f', borderRadius: '50%', filter: 'blur(26px)', top: 'calc(50% - 26px)', left: 'calc(50% - 80px)', opacity: 0.5 }} />
+            <button
+              onClick={handleImplement}
+              disabled={implementDispatching}
+              style={{ background: 'linear-gradient(135deg, #8bab8f 0%, #6d9472 100%)', color: '#1a1b1e', boxShadow: '0 0 8px 2px rgba(139,171,143,0.2)' }}
+              className="relative z-10 inline-flex items-center gap-1.5 pl-4 pr-5 h-9 rounded-full text-[12px] font-semibold transition-transform duration-150 hover:scale-105 active:scale-[0.97] disabled:opacity-60 disabled:scale-100"
+            >
+              <Play size={13} fill="currentColor" />
+              {implementDispatching ? 'Starting…' : 'Dispatch'}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Edit Plan row */}
+      <div className="flex flex-col gap-2 pt-1 border-t border-border/50">
+        <span className="text-[11px] font-medium text-muted-foreground/60 uppercase tracking-wide">Edit Plan</span>
+        <textarea
+          value={editInstructions}
+          onChange={e => setEditInstructions(e.target.value)}
+          placeholder="Edit instructions… (optional — defaults to expand and refine)"
+          rows={2}
+          className={cn(
+            'w-full px-3 py-2 rounded-lg border border-border bg-card',
+            'text-[12px] text-foreground leading-relaxed',
+            'focus:outline-none focus:border-primary/30 focus:ring-1 focus:ring-primary/10',
+            'resize-none placeholder:text-muted-foreground/40'
+          )}
+        />
+        <div className="flex justify-end">
+          <button
+            onClick={handleEdit}
+            disabled={editDispatching}
+            className="inline-flex items-center gap-1.5 px-3.5 h-8 rounded-full text-[12px] font-medium border border-border bg-card text-muted-foreground hover:text-foreground hover:bg-card-hover transition-colors disabled:opacity-60"
+          >
+            <Wrench size={12} />
+            {editDispatching ? 'Starting…' : 'Start Edit'}
+          </button>
+        </div>
+      </div>
+
+    </div>
+  )
+}
+
+function PlanDetail({ plan: initialPlan, onBack, onDispatch, settings, swarm }) {
   const [plan, setPlan] = useState(initialPlan)
   const [isEditing, setIsEditing] = useState(false)
-  const [editContent, setEditContent] = useState(initialPlan.content)
+  const [editContent, setEditContent] = useState('')
   const [saving, setSaving] = useState(false)
+  const [togglingReady, setTogglingReady] = useState(false)
 
   const color = repoIdentityColors[plan.repo] || 'var(--primary)'
+  const jobStatus = resolveJobStatus(plan, swarm)
+  const isRunning = jobStatus === 'in_progress'
+  const isReady = plan.planStatus === 'ready'
+
+  function enterEdit() {
+    setEditContent(stripMetadata(plan.content))
+    setIsEditing(true)
+  }
 
   async function handleSave() {
     setSaving(true)
@@ -93,8 +272,19 @@ function PlanDetail({ plan: initialPlan, onBack, onNavigateToDispatch }) {
     }
   }
 
-  function handleStart() {
-    onNavigateToDispatch(plan.repo, `plans/${plan.slug}.md`, plan.slug)
+  async function toggleReady() {
+    const newStatus = isReady ? null : 'ready'
+    setTogglingReady(true)
+    try {
+      await fetch(`/api/plans/${plan.repo}/${plan.slug}/status`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: newStatus }),
+      })
+      setPlan(p => ({ ...p, planStatus: newStatus }))
+    } finally {
+      setTogglingReady(false)
+    }
   }
 
   return (
@@ -110,17 +300,36 @@ function PlanDetail({ plan: initialPlan, onBack, onNavigateToDispatch }) {
         </button>
         <span className="text-muted-foreground/30">/</span>
         <span className="text-[13px] font-medium text-foreground flex-1 min-w-0 truncate">{plan.title}</span>
-        <span
-          className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium"
-          style={{ color, background: `${color}18` }}
-        >
+        <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium"
+          style={{ color, background: `${color}18` }}>
           {plan.repo}
         </span>
+
+        {/* Ready toggle */}
+        {!isEditing && (
+          <button
+            onClick={toggleReady}
+            disabled={togglingReady}
+            className={cn(
+              'flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-[12px] font-medium transition-all disabled:opacity-50',
+              isReady
+                ? 'text-foreground'
+                : 'border-border bg-card text-muted-foreground hover:text-foreground hover:bg-card-hover'
+            )}
+            style={isReady ? { color: '#8bab8f', borderColor: '#8bab8f40', backgroundColor: '#8bab8f18' } : undefined}
+            title={isReady ? 'Mark as draft' : 'Mark as ready'}
+          >
+            <Check size={12} />
+            {isReady ? 'Ready' : 'Mark ready'}
+          </button>
+        )}
+
+        {/* Edit / Save */}
         {isEditing ? (
           <button
             onClick={handleSave}
             disabled={saving}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-primary/30 bg-primary/10 text-[12px] font-medium text-primary hover:bg-primary/15 transition-colors disabled:opacity-50"
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-[12px] font-medium transition-colors disabled:opacity-50"
             style={{ color: '#8bab8f', borderColor: '#8bab8f40', backgroundColor: '#8bab8f18' }}
           >
             <Check size={12} />
@@ -128,7 +337,7 @@ function PlanDetail({ plan: initialPlan, onBack, onNavigateToDispatch }) {
           </button>
         ) : (
           <button
-            onClick={() => { setEditContent(plan.content); setIsEditing(true) }}
+            onClick={enterEdit}
             className="flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-border bg-card text-[12px] text-muted-foreground hover:text-foreground hover:bg-card-hover transition-colors"
           >
             <Pencil size={12} />
@@ -136,6 +345,17 @@ function PlanDetail({ plan: initialPlan, onBack, onNavigateToDispatch }) {
           </button>
         )}
       </div>
+
+      {/* Active job warning */}
+      {isEditing && isRunning && (
+        <div
+          className="flex items-center gap-2 px-3 py-2 rounded-md border text-[12px]"
+          style={{ color: 'var(--status-review)', borderColor: 'var(--status-review-border)', backgroundColor: 'var(--status-review-bg)' }}
+        >
+          <AlertTriangle size={13} className="shrink-0" />
+          Agent is currently working from this plan
+        </div>
+      )}
 
       {/* Content */}
       {isEditing ? (
@@ -153,31 +373,18 @@ function PlanDetail({ plan: initialPlan, onBack, onNavigateToDispatch }) {
         />
       ) : (
         <div className="px-4 py-3 rounded-lg border border-border bg-card text-[13px] text-foreground/90 leading-relaxed">
-          <Markdown remarkPlugins={[remarkGfm]} components={mdComponents}>{plan.content}</Markdown>
+          <Markdown remarkPlugins={[remarkGfm]} components={mdComponents}>{stripMetadata(plan.content)}</Markdown>
         </div>
       )}
 
-      {/* Start button */}
+      {/* Dispatch bar */}
       {!isEditing && (
-        <div className="flex justify-end pt-1">
-          <div className="relative inline-flex items-center justify-center">
-            <div className="absolute inset-0 pointer-events-none">
-              <div className="absolute pointer-events-none animate-loading-halo" style={{ width: '180px', height: '60px', background: '#8bab8f', borderRadius: '50%', filter: 'blur(30px)', top: 'calc(50% - 30px)', left: 'calc(50% - 90px)', opacity: 0.6 }} />
-            </div>
-            <button
-              onClick={handleStart}
-              style={{
-                background: 'linear-gradient(135deg, #8bab8f 0%, #6d9472 100%)',
-                color: '#1a1b1e',
-                boxShadow: '0 0 8px 2px rgba(139,171,143,0.25)',
-              }}
-              className="relative z-10 inline-flex items-center gap-2 pl-5 pr-6 h-10 rounded-full text-[13px] font-semibold transition-transform duration-150 hover:scale-105 active:scale-[0.97]"
-            >
-              <Play size={14} fill="currentColor" />
-              Start
-            </button>
-          </div>
-        </div>
+        <PlanDispatchBar
+          plan={plan}
+          swarm={swarm}
+          settings={settings}
+          onDispatch={onDispatch}
+        />
       )}
     </div>
   )
@@ -189,7 +396,7 @@ function readSavedFilter() {
   try { return localStorage.getItem(FILTER_KEY) || null } catch { return null }
 }
 
-export default function PlansView({ overview, swarm, onNavigateToDispatch }) {
+export default function PlansView({ overview, swarm, onDispatch, settings }) {
   const [plans, setPlans] = useState([])
   const [loading, setLoading] = useState(true)
   const [selectedPlan, setSelectedPlan] = useState(null)
@@ -226,7 +433,9 @@ export default function PlansView({ overview, swarm, onNavigateToDispatch }) {
       <PlanDetail
         plan={selectedPlan}
         onBack={handleBack}
-        onNavigateToDispatch={onNavigateToDispatch}
+        onDispatch={onDispatch}
+        settings={settings}
+        swarm={swarm}
       />
     )
   }

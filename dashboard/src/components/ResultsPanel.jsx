@@ -1,12 +1,13 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { CheckCircle, XCircle, Loader, Clock, Square, Activity, ListChecks, GitMerge, Scissors, Network, Trash2, Send, RotateCcw, ChevronRight, ChevronDown, GitBranch, Copy, Check, MoreHorizontal } from 'lucide-react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { cn, timeAgo } from '../lib/utils'
 import { statusConfig, validationConfig } from '../lib/statusConfig'
-import { repoIdentityColors, MODEL_OPTIONS, FOLLOWUP_TEMPLATES } from '../lib/constants'
+import { repoIdentityColors, FOLLOWUP_TEMPLATES } from '../lib/constants'
+import { useAgentModels } from '../lib/useAgentModels'
 import { mdComponents } from './mdComponents'
-import Toggle from './Toggle'
+import DispatchSettingsRow from './DispatchSettingsRow'
 
 function parseFrontMatter(raw) {
   const text = String(raw || '')
@@ -436,7 +437,7 @@ function DiffSummary({ diffData, diffLoading }) {
 
 /* ── Zone 3 sub-components ─────────────────────────────── */
 
-function AgentActions({ detail, agentId, diffData, onJobsRefresh, onOverviewRefresh, onStartTask, onBack, onRemoveSession, showToast, showFeedbackMsg }) {
+function AgentActions({ detail, agentId, diffData, onJobsRefresh, onOverviewRefresh, onStartTask, onBack, onRemoveSession, showToast, showFeedbackMsg, settings }) {
   const [merging, setMerging] = useState(false)
   const [mergedBranch, setMergedBranch] = useState(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -538,14 +539,13 @@ function AgentActions({ detail, agentId, diffData, onJobsRefresh, onOverviewRefr
     }
   }
 
-  async function handleFollowUpDispatch(prompt, model, autoMerge, originalTask = null) {
+  async function handleFollowUpDispatch(prompt, dispatchOpts = {}) {
     if (!detail?.repo) return
     setDispatching(true)
     try {
       const sessionId = await onStartTask?.(prompt, detail.repo, {
-        model,
-        autoMerge,
-        originalTask: originalTask || prompt,
+        ...dispatchOpts,
+        originalTask: dispatchOpts.originalTask || prompt,
       })
       if (!sessionId) {
         throw new Error('Failed to start follow-up worker')
@@ -677,6 +677,7 @@ function AgentActions({ detail, agentId, diffData, onJobsRefresh, onOverviewRefr
                 detail={detail}
                 onDispatch={handleFollowUpDispatch}
                 dispatching={dispatching}
+                settings={settings}
               />
             </div>
           )}
@@ -703,11 +704,59 @@ function AgentActions({ detail, agentId, diffData, onJobsRefresh, onOverviewRefr
   )
 }
 
-function FollowUpChat({ repoName, detail, onDispatch, dispatching }) {
-  const [chatModel, setChatModel] = useState(MODEL_OPTIONS[0].value)
-  const [chatAutoMerge, setChatAutoMerge] = useState(false)
+function readDispatchSaved() {
+  try { return JSON.parse(localStorage.getItem('dispatch-settings')) || {} } catch { return {} }
+}
+function writeDispatchSaved(patch) {
+  try {
+    const prev = readDispatchSaved()
+    localStorage.setItem('dispatch-settings', JSON.stringify({ ...prev, ...patch }))
+  } catch {}
+}
+
+function FollowUpChat({ repoName, detail, onDispatch, dispatching, settings: appSettings }) {
+  const saved = useRef(null)
+  if (!saved.current) { saved.current = readDispatchSaved() }
+  const s = saved.current
+  const agentSettings = appSettings?.agents || {}
+
+  const [agent, setAgentRaw] = useState(s.agent || 'claude')
+  const [model, setModelRaw] = useState(s.model || agentSettings[s.agent || 'claude']?.defaultModel || '')
+  const [maxTurns, setMaxTurnsRaw] = useState(() => {
+    const cfg = agentSettings[s.agent || 'claude'] || {}
+    return 'defaultMaxTurns' in cfg ? cfg.defaultMaxTurns : 10
+  })
+  const [useWorktree, setUseWorktreeRaw] = useState(s.useWorktree ?? false)
+  const [autoMerge, setAutoMergeRaw] = useState(s.autoMerge ?? false)
+  const [plainOutput, setPlainOutputRaw] = useState(s.plainOutput ?? !(agentSettings[s.agent || 'claude']?.tuiMode ?? true))
+  const models = useAgentModels(agent)
+
   const [chatPrompt, setChatPrompt] = useState('')
   const [activeTemplate, setActiveTemplate] = useState(null)
+
+  const setModel = v => { setModelRaw(v); writeDispatchSaved({ model: v }) }
+  const setMaxTurns = v => { setMaxTurnsRaw(v) }
+  const setUseWorktree = v => { setUseWorktreeRaw(v); writeDispatchSaved({ useWorktree: v }) }
+  const setAutoMerge = v => { setAutoMergeRaw(v); writeDispatchSaved({ autoMerge: v }) }
+  const setPlainOutput = v => { setPlainOutputRaw(v); writeDispatchSaved({ plainOutput: v }) }
+
+  function switchAgent(newAgent) {
+    const defaults = agentSettings[newAgent] || {}
+    const newModel = defaults.defaultModel || ''
+    const newTurns = 'defaultMaxTurns' in defaults ? defaults.defaultMaxTurns : (newAgent === 'claude' ? 10 : null)
+    const newPlainOutput = !(defaults.tuiMode ?? true)
+    setAgentRaw(newAgent); setModelRaw(newModel); setMaxTurnsRaw(newTurns); setPlainOutputRaw(newPlainOutput)
+    writeDispatchSaved({ agent: newAgent, model: newModel, plainOutput: newPlainOutput })
+  }
+
+  useEffect(() => {
+    if (models.length > 0 && !models.find(m => m.value === model)) {
+      const newModel = agentSettings[agent]?.defaultModel || models[0].value
+      setModel(newModel)
+    }
+  }, [models])
+
+  const isCodex = agent === 'codex'
 
   async function handleDispatch() {
     if (!chatPrompt.trim()) return
@@ -717,28 +766,34 @@ function FollowUpChat({ repoName, detail, onDispatch, dispatching }) {
     const promptWithContext = contextLine && !hasContext
       ? `${basePrompt}\n\n---\n${contextLine}`
       : basePrompt
-    await onDispatch?.(promptWithContext, chatModel, chatAutoMerge, basePrompt)
+    await onDispatch?.(promptWithContext, {
+      agent,
+      model,
+      maxTurns: isCodex ? null : maxTurns,
+      autoMerge,
+      useWorktree,
+      plainOutput,
+      originalTask: basePrompt,
+    })
     setChatPrompt('')
     setActiveTemplate(null)
   }
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-3">
-        <select
-          value={chatModel}
-          onChange={(e) => setChatModel(e.target.value)}
-          className="h-8 px-2 rounded-md border border-border bg-card text-[11px] text-foreground focus:outline-none focus:border-primary/30"
-        >
-          {MODEL_OPTIONS.map(opt => (
-            <option key={opt.value} value={opt.value}>{opt.label}</option>
-          ))}
-        </select>
-
-        <Toggle checked={chatAutoMerge} onChange={setChatAutoMerge} />
-        <span className="text-[11px] text-foreground/70">Auto-merge</span>
+      {/* Dispatch settings */}
+      <div className="flex items-start gap-3 flex-wrap">
+        <DispatchSettingsRow
+          agent={agent} onSwitchAgent={switchAgent}
+          model={model} setModel={setModel} models={models}
+          maxTurns={maxTurns} setMaxTurns={setMaxTurns}
+          useWorktree={useWorktree} setUseWorktree={setUseWorktree}
+          autoMerge={autoMerge} setAutoMerge={setAutoMerge}
+          plainOutput={plainOutput} setPlainOutput={setPlainOutput}
+        />
       </div>
 
+      {/* Template buttons */}
       {detail && (
         <div className="flex items-center gap-1.5 flex-wrap">
           {FOLLOWUP_TEMPLATES.map(tpl => (
@@ -762,6 +817,7 @@ function FollowUpChat({ repoName, detail, onDispatch, dispatching }) {
         </div>
       )}
 
+      {/* Prompt + Dispatch button */}
       <div className="flex items-start gap-2">
         <textarea
           value={chatPrompt}
@@ -814,7 +870,7 @@ function getHeroBg(status, validation) {
 
 /* ── Main component ────────────────────────────────────── */
 
-export default function ResultsPanel({ agentId, hasLiveTerminal = false, onJobsRefresh, onOverviewRefresh, onStartTask, onResumeJob, onBack, onRemoveSession, showToast }) {
+export default function ResultsPanel({ agentId, hasLiveTerminal = false, onJobsRefresh, onOverviewRefresh, onStartTask, onResumeJob, onBack, onRemoveSession, showToast, settings }) {
   const [detail, setDetail] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
@@ -1245,6 +1301,7 @@ export default function ResultsPanel({ agentId, hasLiveTerminal = false, onJobsR
           onRemoveSession={onRemoveSession}
           showToast={showToast}
           showFeedbackMsg={showFeedbackMsg}
+          settings={settings}
         />
       </div>
     </div>

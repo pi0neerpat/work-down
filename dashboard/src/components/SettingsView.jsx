@@ -1,21 +1,23 @@
 import { Bot, Sparkles } from 'lucide-react'
 import { useAgentModels } from '../lib/useAgentModels'
+import { getAgentBrandColor } from '../lib/constants'
 import Toggle from './Toggle'
 
 function AgentCard({ agentId, label, icon: Icon, agentSettings, onUpdate, showMaxTurns = true, showTuiMode = false }) {
   const { defaultModel, defaultMaxTurns, skipPermissions, tuiMode, extraFlags } = agentSettings
   const models = useAgentModels(agentId)
+  const brandColor = getAgentBrandColor(agentId)
 
   return (
     <div className="rounded-lg border border-border bg-card p-4 space-y-3">
       <div className="flex items-center gap-2">
-        <Icon size={15} className="text-muted-foreground" />
-        <span className="text-[13px] font-medium">{label}</span>
+        <Icon size={15} style={{ color: brandColor }} />
+        <span className="text-[13px] font-medium" style={{ color: brandColor }}>{label}</span>
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className="flex items-end gap-3">
         {/* Default Model */}
-        <div>
+        <div className="w-56">
           <label className="block text-[11px] font-medium text-muted-foreground mb-1">Default Model</label>
           <select
             value={defaultModel}
@@ -29,25 +31,23 @@ function AgentCard({ agentId, label, icon: Icon, agentSettings, onUpdate, showMa
         </div>
 
         {/* Default Max Turns */}
-        <div>
-          <label className="block text-[11px] font-medium text-muted-foreground mb-1">
-            Default Max Turns
-          </label>
-          <input
-            type="number"
-            min={1}
-            max={200}
-            value={defaultMaxTurns ?? ''}
-            disabled={!showMaxTurns}
-            onChange={(e) => onUpdate(agentId, { defaultMaxTurns: parseInt(e.target.value) || null })}
-            placeholder={showMaxTurns ? '10' : 'N/A'}
-            className="w-full h-8 px-2.5 rounded-md border border-border bg-background text-[12px] text-foreground font-mono focus:outline-none focus:border-primary/30 disabled:opacity-40 disabled:cursor-not-allowed"
-            style={{ fontFamily: 'var(--font-mono)' }}
-          />
-          {!showMaxTurns && (
-            <p className="text-[10px] text-muted-foreground/50 mt-0.5">Codex uses quotas, not turn limits</p>
-          )}
-        </div>
+        {showMaxTurns && (
+          <div className="w-20 shrink-0">
+            <label className="block text-[11px] font-medium text-muted-foreground mb-1">
+              Max Turns
+            </label>
+            <input
+              type="number"
+              min={0}
+              max={200}
+              value={defaultMaxTurns ?? 0}
+              onChange={(e) => { const v = parseInt(e.target.value); onUpdate(agentId, { defaultMaxTurns: !v ? null : v }) }}
+              placeholder="0 = no limit"
+              className="w-full h-8 px-2.5 rounded-md border border-border bg-background text-[12px] text-foreground font-mono focus:outline-none focus:border-primary/30"
+              style={{ fontFamily: 'var(--font-mono)' }}
+            />
+          </div>
+        )}
       </div>
 
       {/* Skip Permissions */}
@@ -59,7 +59,7 @@ function AgentCard({ agentId, label, icon: Icon, agentSettings, onUpdate, showMa
         <div>
           <span className="text-[12px] text-foreground/80">Skip Permissions</span>
           <p className="text-[10px] text-muted-foreground/50">
-            {agentId === 'claude' ? '--dangerously-skip-permissions' : '--yolo'}
+            {agentId === 'claude' ? '--dangerously-skip-permissions' : '--dangerously-bypass-approvals-and-sandbox'}
           </p>
         </div>
       </div>

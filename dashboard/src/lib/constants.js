@@ -43,6 +43,29 @@ export const AGENT_OPTIONS = [
 ]
 
 /**
+ * Agent brand colors.
+ * Claude: Anthropic orange. Codex: OpenAI green.
+ */
+export const AGENT_BRAND_COLORS = {
+  claude: '#D97757',
+  codex: '#10A37F',
+}
+
+/**
+ * Normalizes unknown values to a supported agent id.
+ */
+export function normalizeAgentId(agent) {
+  return agent === 'codex' ? 'codex' : 'claude'
+}
+
+/**
+ * Returns the base brand color for an agent.
+ */
+export function getAgentBrandColor(agent) {
+  return AGENT_BRAND_COLORS[normalizeAgentId(agent)]
+}
+
+/**
  * Follow-up dispatch template prompts.
  * Each template receives the swarm detail object and returns a pre-filled prompt string.
  */

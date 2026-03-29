@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from 'react'
 import { Bot, Sparkles, AlertCircle, CheckCircle2, XCircle, Clock } from 'lucide-react'
 import { cn, timeAgo } from '../lib/utils'
-import { repoIdentityColors } from '../lib/constants'
+import { repoIdentityColors, normalizeAgentId, getAgentBrandColor } from '../lib/constants'
 import { buildWorkerNavItems } from '../lib/workerUtils'
 import { FilterChip, toggleFilter, BUG_COLOR, loadFilters, saveFilters } from '../lib/filterUtils.jsx'
 
@@ -14,6 +14,11 @@ const STATUS_LABELS = {
   rejected: 'Rejected',
   completed: 'Completed',
   failed: 'Failed',
+}
+
+const AGENT_ICONS = {
+  claude: Bot,
+  codex: Sparkles,
 }
 
 function classifyItem(worker) {
@@ -104,7 +109,13 @@ export default function JobsView({
     .map(status => ({
       ...GROUP_CONFIG[status],
       status,
-      items: filteredItems.filter(w => w.filterStatus === status),
+      items: filteredItems
+        .filter(w => w.filterStatus === status)
+        .sort((a, b) => {
+          const ta = a.created ? new Date(a.created).getTime() : 0
+          const tb = b.created ? new Date(b.created).getTime() : 0
+          return tb - ta
+        }),
     }))
     .filter(g => g.items.length > 0)
 
@@ -181,6 +192,9 @@ export default function JobsView({
               <div className="space-y-2">
                 {group.items.map(worker => {
                   const repoColor = repoIdentityColors[worker.repo] || 'var(--primary)'
+                  const normalizedAgent = normalizeAgentId(worker.agent)
+                  const AgentIcon = AGENT_ICONS[normalizedAgent] || Bot
+                  const agentColor = getAgentBrandColor(normalizedAgent)
                   const duration = worker.durationMinutes != null
                     ? timeAgo(null, worker.durationMinutes)
                     : worker.created
@@ -191,33 +205,44 @@ export default function JobsView({
                     <button
                       key={worker.key}
                       onClick={() => onSelectJob?.(worker.jobId || worker.id)}
-                      className="w-full text-left px-4 py-3 rounded-lg border bg-card hover:bg-card-hover/40 transition-all group animate-fade-up"
+                      className="w-full text-left px-3.5 py-2.5 rounded-lg border bg-card hover:bg-card-hover transition-colors group animate-fade-up"
                       style={{ borderColor: 'rgba(255,255,255,0.05)' }}
                       onMouseEnter={e => e.currentTarget.style.borderColor = 'rgba(139,171,143,0.35)'}
                       onMouseLeave={e => e.currentTarget.style.borderColor = 'rgba(255,255,255,0.05)'}
                     >
-                      <div className="flex items-center gap-3">
-                        <span className={cn('w-2 h-2 rounded-full shrink-0', group.dotClass, worker.status === 'in_progress' && 'animate-pulse-soft')} />
+                      <div className="flex items-start gap-3">
+                        <span
+                          className={cn(
+                            'w-5 h-5 rounded-md border flex items-center justify-center shrink-0 self-center',
+                            worker.status === 'in_progress' && 'animate-pulse-soft'
+                          )}
+                          style={{ color: agentColor, background: `${agentColor}12`, borderColor: `${agentColor}30` }}
+                          title={normalizedAgent === 'codex' ? 'Codex' : 'Claude'}
+                        >
+                          <AgentIcon size={11} />
+                        </span>
+
                         <div className="flex-1 min-w-0">
                           <p className="text-[13px] font-medium text-foreground truncate">{worker.label}</p>
-                          <div className="flex items-center gap-2 mt-0.5">
-                            <span
-                              className="text-[9px] px-1.5 py-0.5 rounded-full border font-medium capitalize"
-                              style={{ background: `${repoColor}10`, color: repoColor, borderColor: `${repoColor}30` }}
-                            >
-                              {worker.repo}
+                          {duration && (
+                            <span className="text-[10px] text-muted-foreground/40 flex items-center gap-1 mt-0.5 font-mono" style={{ fontFamily: 'var(--font-mono)' }}>
+                              <Clock size={9} />
+                              {duration}
                             </span>
-                            {duration && (
-                              <span className="text-[10px] text-muted-foreground/40 flex items-center gap-1 font-mono" style={{ fontFamily: 'var(--font-mono)' }}>
-                                <Clock size={9} />
-                                {duration}
-                              </span>
-                            )}
-                          </div>
+                          )}
                         </div>
-                        <span className="text-[11px] text-muted-foreground/40 group-hover:text-primary transition-colors">
-                          View
-                        </span>
+
+                        <div className="flex items-center gap-2 shrink-0 self-center">
+                          <span
+                            className="text-[9px] px-1.5 py-0.5 rounded-full border font-medium capitalize"
+                            style={{ background: `${repoColor}10`, color: repoColor, borderColor: `${repoColor}30` }}
+                          >
+                            {worker.repo}
+                          </span>
+                          <span className="text-[11px] text-muted-foreground/40 group-hover:text-primary transition-colors">
+                            View
+                          </span>
+                        </div>
                       </div>
                     </button>
                   )

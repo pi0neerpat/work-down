@@ -783,51 +783,91 @@ app.get(['/api/jobs/:id/diff', '/api/swarm/:id/diff'], (req, res) => {
   const detail = parseJobFile(found.filePath)
 
   // Branch cleaned up after merge — return sentinel so UI can show merged state
-  if (!detail.branch || detail.worktreePath === '(merged)') {
+  if (detail.worktreePath === '(merged)') {
     return res.json({ merged: true })
   }
 
-  const validBranchRe = /^[a-zA-Z0-9._\-/]+$/
-  const base = req.query.base || 'main'
-  if (!validBranchRe.test(base)) {
-    return res.status(400).json({ error: `Invalid base branch: ${base}` })
-  }
-  if (!validBranchRe.test(detail.branch)) {
-    return res.status(400).json({ error: `Invalid job branch: ${detail.branch}` })
-  }
-
   const repoPath = found.repo.resolvedPath
-  try {
-    const git = (...args) => execFileSync('git', ['-C', repoPath, ...args], { encoding: 'utf8' }).trim()
+  const validBranchRe = /^[a-zA-Z0-9._\-/]+$/
+  const validShaRe = /^[0-9a-f]{7,40}$/
 
-    const commits = parseInt(git('rev-list', '--count', `${base}..${detail.branch}`), 10) || 0
-
-    const nameStatus = git('diff', '--name-status', `${base}..${detail.branch}`)
-    const files = nameStatus
-      ? nameStatus.split('\n').filter(Boolean).map(line => {
-          const parts = line.split('\t')
-          const letter = parts[0]?.[0] || '?'
-          // Renames: R<score>\t<old>\t<new> — show the new path
-          const filePath = parts.length >= 3 ? parts[2] : parts[1] || ''
-          return { status: letter, path: filePath }
-        })
-      : []
-
-    let insertions = 0, deletions = 0
-    const shortstat = git('diff', '--shortstat', `${base}..${detail.branch}`)
-    if (shortstat) {
-      const ins = shortstat.match(/(\d+) insertion/)
-      const del = shortstat.match(/(\d+) deletion/)
-      if (ins) insertions = parseInt(ins[1], 10)
-      if (del) deletions = parseInt(del[1], 10)
+  // Worktree jobs: diff branch vs base (existing behavior)
+  // Non-worktree jobs: diff startCommit..HEAD to show only this job's changes
+  if (detail.branch) {
+    const base = req.query.base || 'main'
+    if (!validBranchRe.test(base)) {
+      return res.status(400).json({ error: `Invalid base branch: ${base}` })
+    }
+    if (!validBranchRe.test(detail.branch)) {
+      return res.status(400).json({ error: `Invalid job branch: ${detail.branch}` })
     }
 
-    return res.json({ files, insertions, deletions, commits, merged: false })
-  } catch (err) {
-    // Branch not found in this repo (e.g. never committed or already gone)
-    return res.status(404).json({ error: 'Branch not found', merged: false })
+    try {
+      const git = (...args) => execFileSync('git', ['-C', repoPath, ...args], { encoding: 'utf8' }).trim()
+      const diffRange = `${base}..${detail.branch}`
+
+      const commits = parseInt(git('rev-list', '--count', diffRange), 10) || 0
+      const nameStatus = git('diff', '--name-status', diffRange)
+      const files = parseNameStatus(nameStatus)
+
+      let insertions = 0, deletions = 0
+      const shortstat = git('diff', '--shortstat', diffRange)
+      if (shortstat) {
+        const ins = shortstat.match(/(\d+) insertion/)
+        const del = shortstat.match(/(\d+) deletion/)
+        if (ins) insertions = parseInt(ins[1], 10)
+        if (del) deletions = parseInt(del[1], 10)
+      }
+
+      return res.json({ files, insertions, deletions, commits, merged: false })
+    } catch (err) {
+      return res.status(404).json({ error: 'Branch not found', merged: false })
+    }
   }
+
+  // Non-worktree job with a recorded start commit
+  if (detail.startCommit) {
+    if (!validShaRe.test(detail.startCommit)) {
+      return res.status(400).json({ error: 'Invalid start commit SHA' })
+    }
+
+    try {
+      const git = (...args) => execFileSync('git', ['-C', repoPath, ...args], { encoding: 'utf8' }).trim()
+      const diffRange = `${detail.startCommit}..HEAD`
+
+      const commits = parseInt(git('rev-list', '--count', diffRange), 10) || 0
+      const nameStatus = git('diff', '--name-status', diffRange)
+      const files = parseNameStatus(nameStatus)
+
+      let insertions = 0, deletions = 0
+      const shortstat = git('diff', '--shortstat', diffRange)
+      if (shortstat) {
+        const ins = shortstat.match(/(\d+) insertion/)
+        const del = shortstat.match(/(\d+) deletion/)
+        if (ins) insertions = parseInt(ins[1], 10)
+        if (del) deletions = parseInt(del[1], 10)
+      }
+
+      return res.json({ files, insertions, deletions, commits, merged: false })
+    } catch (err) {
+      return res.status(404).json({ error: 'Start commit not found', merged: false })
+    }
+  }
+
+  // No branch and no start commit — can't compute a diff
+  return res.json({ merged: true })
 })
+
+function parseNameStatus(nameStatus) {
+  if (!nameStatus) return []
+  return nameStatus.split('\n').filter(Boolean).map(line => {
+    const parts = line.split('\t')
+    const letter = parts[0]?.[0] || '?'
+    // Renames: R<score>\t<old>\t<new> — show the new path
+    const filePath = parts.length >= 3 ? parts[2] : parts[1] || ''
+    return { status: letter, path: filePath }
+  })
+}
 
 app.get('/api/activity', (req, res) => {
   const limit = Math.max(1, parseInt(req.query.limit, 10) || 10)
@@ -1059,6 +1099,14 @@ app.post(['/api/jobs/init', '/api/swarm/init'], (req, res) => {
     } catch (err) {
       console.warn(`[worktree] Failed to create worktree for ${jobId}, falling back to main repo: ${err.message}`)
     }
+  }
+
+  // For non-worktree jobs, record the current HEAD so we can diff just this job's changes
+  if (!worktreeInfo) {
+    try {
+      const headSha = execFileSync('git', ['-C', repoConfig.resolvedPath, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
+      lines.push(`StartCommit: ${headSha}`)
+    } catch { /* no git or no commits yet */ }
   }
 
   lines.push('', '## Progress', `- [${timestamp}] Task initiated from dashboard`, '', '## Results', '')

@@ -14,6 +14,10 @@
 - **please address these findings --- Previous job context: notes/jobs/2026-03-30-review-the-code-changes-check-for-bugs-security-is.md**
 - **Use the plan skill and write the output to ./plans/ For continued tasks we need to show a link back from the job review page to the parent task. We already do this with plans, so we can use the same pattern for this**
 - **plans/SECURITY_IMPROVEMENTS.md**
+- **was this code merged into our working branch? --- Previous job context: notes/jobs/2026-03-30-plans-2026-03-30-parent-job-link-md-generate-a-pla.md**
+- **please merge it --- Previous job context: notes/jobs/2026-03-30-was-this-code-merged-into-our-working-branch-previ.md**
+- **please list all the dangling worktrees and their associated jobs**
+- **our current diff view is not behaving as expected. is it possible to view only changes made in a job? For worktrees this is easy For non worktrees this is confusing because there may be many active changes in git**
 
 ---
 

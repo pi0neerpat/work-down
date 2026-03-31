@@ -39,6 +39,9 @@ plans/
 # Agent runtime
 .agents/
 
+# Dispatch loop artifacts
+.dispatch/
+
 # Claude local settings (personal permissions, not committed)
 .claude/settings.local.json
 

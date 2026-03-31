@@ -69,6 +69,8 @@ Files to create in <path>/ (skipped if already exist):
   bugs.md          — bug tracker
   activity-log.md  — activity log
 
+.gitignore           — add .dispatch/ entry (created or appended)
+
 Hook to install in <path>/.claude/:
   hooks/hub-stop.js   — signals the dashboard when a job finishes
   settings.json       — registers the hook (merged with existing if present)
@@ -102,7 +104,24 @@ Create any that are missing using the exact formats from [references/formats.md]
 
 ---
 
-## Step 7: Install hooks
+## Step 7: Add .dispatch/ to .gitignore
+
+The `.dispatch/` directory holds loop run artifacts (logs, reviewer outputs) and is always gitignored.
+
+Check if `.gitignore` exists in the target repo:
+```bash
+test -f <resolved-path>/.gitignore && echo "exists" || echo "missing"
+```
+
+- **If missing:** create `.gitignore` containing just `.dispatch/`
+- **If exists:** check whether `.dispatch/` is already present. If not, append it:
+  ```bash
+  echo ".dispatch/" >> <resolved-path>/.gitignore
+  ```
+
+---
+
+## Step 8: Install hooks
 
 Two hooks get installed in every connected repo:
 - **`hub-stop.js`** — signals the dashboard when a dispatched job finishes. No-op when Dispatch isn't running.
@@ -156,7 +175,7 @@ test -f <resolved-path>/.claude/settings.json && echo "exists" || echo "missing"
 
 ---
 
-## Step 8: Confirm
+## Step 9: Confirm
 
 ```bash
 node cli.js repos

@@ -1,5 +1,21 @@
 # Hub — Task Tracker
 
+## Future
+
+
+## Present
+
+- [ ] change .hub-runtime to .dispatch and update all references to it.
+- [ ] rename hub.root to dispatch.root in config.json, config.local.json, and config.example.json
+- [ ] Move tests to a separate directory. Update test command accordingly
+- [ ] add skills-lock.json to gitignore
+- [ ] Add multi-dispatch feature for task list. On right, to left of "Start", show a checkbox to select multiple tasks. When at least one is selected hide the "Start" button and show a "Start <n> tasks" button. When no tasks are selected, show the "Start" button. Then on the dispatch page, show each task in the prompt input. We also need a way to track multi-task completion for a single job. Show Mark Task done button for each task, but limit the text to a reasonable length, so we don't have large newlines. Hovering over the task name should show the full task text.
+- [ ] If work is added to the base repo, then worktree diffs show all these changes, since it currently uses the commit it was started from. We need to make sure that the worktree diffs show only the changes for the current job. It would also be nice to show the changes for the current job even without using worktrees, but im not sure how to do that.
+
+## Workflows
+
+- [ ] Make loop.sh script able to exit cleanly when needed (stuck/no progress after a certain number of iterations/no new tasks found)
+
 ## Planning 
 
 - [x] Solve markdown clobbering problem with serial operations in the server. Are there any other changes outside of the server process that could cause problems? — *Feedback: regex-based parsing has no transactions; concurrent writes corrupt files. At scale (50+ tasks, 5+ repos) consider SQLite as backing store with markdown as render format.*
@@ -17,7 +33,7 @@
 - [x] follow up for a job needs to have all the same options as the dispatch (minus changing repo)
 - [x] Follow up dispatch on a job needs to include all the inputs as on the dispatch page (except repo). Basically an inline dispatch view
 - [x] Implement skills selection when dispatching a task
-- [ ] start another one
+- [x] start another one
 
 ## Features
 

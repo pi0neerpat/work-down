@@ -43,7 +43,7 @@ const require = createRequire(import.meta.url)
 const pty = require('node-pty')
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const {
-  parseTaskFile, parseActivityLog, getGitInfo, parseJobFile, parseJobDir, parsePlansDir, parseFrontmatter, parseSkillsDir, loadConfig,
+  parseTaskFile, parseActivityLog, getGitInfo, parseJobFile, parseJobDir, parsePlansDir, parseFrontmatter, parseSkillsDir, loadConfig, parseLoopState,
   writeTaskDone, writeTaskDoneByText, writeTaskReopenByText, writeTaskAdd, writeTaskEdit, writeTaskMove,
   writeActivityEntry, writeJobValidation, writeJobKill, writeJobStatus, writeJobResults,
   createCheckpoint, revertCheckpoint, dismissCheckpoint, listCheckpoints,
@@ -757,7 +757,9 @@ app.get(['/api/jobs', '/api/swarm'], (req, res) => {
     if (a.validation === 'needs_validation') needsValidation++
   }
 
-  const jobs = allAgents.map(a => ({
+  const jobs = allAgents
+    .filter(a => a.type !== 'loop')
+    .map(a => ({
       id: a.id,
       repo: a.repo,
       taskName: a.taskName,
@@ -783,6 +785,148 @@ app.get(['/api/jobs', '/api/swarm'], (req, res) => {
     summary: { active, completed, failed, needsValidation },
   })
 })
+
+// ── Loop endpoints ──────────────────────────────────────────────────────────
+
+const VALID_LOOP_TYPES = new Set(['linear-implementation', 'linear-review', 'parallel-review'])
+
+app.get('/api/loops', (req, res) => {
+  const allAgents = collectJobAgents()
+  const latestRunByJob = new Map()
+  for (const run of jobRuns) {
+    if (!run.jobId) continue
+    const prev = latestRunByJob.get(run.jobId)
+    if (!prev || Date.parse(run.updatedAt || run.createdAt || 0) > Date.parse(prev.updatedAt || prev.createdAt || 0)) {
+      latestRunByJob.set(run.jobId, run)
+    }
+  }
+  const config = getConfig()
+  const repoByName = new Map(config.repos.map(r => [r.name, r]))
+
+  const loops = allAgents
+    .filter(a => a.type === 'loop')
+    .map(a => {
+      const job = {
+        id: a.id,
+        repo: a.repo,
+        taskName: a.taskName,
+        agent: a.agent || 'claude',
+        started: a.started,
+        status: a.status,
+        validation: a.validation,
+        lastProgress: a.lastProgress,
+        progressCount: a.progressCount,
+        durationMinutes: a.durationMinutes,
+        skills: a.skills,
+        session: latestRunByJob.get(a.id)?.sessionId || a.session,
+        runState: latestRunByJob.get(a.id)?.state || null,
+        loopType: a.loopType || null,
+      }
+      const repoConfig = repoByName.get(a.repo)
+      if (repoConfig && a.loopType) {
+        const loopDir = path.join(repoConfig.resolvedPath, '.dispatch', 'loops', a.loopType)
+        job.loopState = parseLoopState(loopDir)
+      }
+      return job
+    })
+  res.json({ jobs: loops, agents: loops })
+})
+
+app.get('/api/loops/:repo/prompt', (req, res) => {
+  const { type } = req.query
+  if (!type || !VALID_LOOP_TYPES.has(type)) {
+    return res.status(400).json({ error: `Invalid loop type. Must be one of: ${[...VALID_LOOP_TYPES].join(', ')}` })
+  }
+  const repoConfig = findRepoConfig(req.params.repo)
+  if (!repoConfig) return res.status(404).json({ error: `repo "${req.params.repo}" not found` })
+  const promptPath = path.join(repoConfig.resolvedPath, '.dispatch', 'loops', type, 'prompt.md')
+  const exists = fs.existsSync(promptPath)
+  res.json({ content: exists ? fs.readFileSync(promptPath, 'utf8') : '', exists })
+})
+
+app.put('/api/loops/:repo/prompt', (req, res) => {
+  const { type, content } = req.body || {}
+  if (!type || !VALID_LOOP_TYPES.has(type)) {
+    return res.status(400).json({ error: `Invalid loop type. Must be one of: ${[...VALID_LOOP_TYPES].join(', ')}` })
+  }
+  const repoConfig = findRepoConfig(req.params.repo)
+  if (!repoConfig) return res.status(404).json({ error: `repo "${req.params.repo}" not found` })
+  const promptPath = path.join(repoConfig.resolvedPath, '.dispatch', 'loops', type, 'prompt.md')
+  fs.mkdirSync(path.dirname(promptPath), { recursive: true })
+  fs.writeFileSync(promptPath, content || '', 'utf8')
+  res.json({ ok: true })
+})
+
+app.post('/api/loops/init', (req, res) => {
+  const { repo, loopType, promptContent, reviewerAgents, synthesizerAgent, implementorAgent, agentSpec } = req.body || {}
+  if (!repo) return res.status(400).json({ error: 'repo required' })
+  if (!loopType || !VALID_LOOP_TYPES.has(loopType)) {
+    return res.status(400).json({ error: `Invalid loopType. Must be one of: ${[...VALID_LOOP_TYPES].join(', ')}` })
+  }
+  const repoConfig = findRepoConfig(repo)
+  if (!repoConfig) return res.status(404).json({ error: `repo "${repo}" not found` })
+
+  // Write prompt file if provided
+  if (promptContent != null) {
+    const promptPath = path.join(repoConfig.resolvedPath, '.dispatch', 'loops', loopType, 'prompt.md')
+    fs.mkdirSync(path.dirname(promptPath), { recursive: true })
+    fs.writeFileSync(promptPath, promptContent, 'utf8')
+  }
+
+  // Create job file
+  const date = new Date().toISOString().slice(0, 10)
+  const jobsDir = path.join(repoConfig.resolvedPath, 'notes', 'jobs')
+  fs.mkdirSync(jobsDir, { recursive: true })
+  const slug = loopType.slice(0, 50)
+  const { fileName, filePath } = allocateUniqueJobFile({ jobsDir, datePrefix: date, slug })
+  const _now = new Date()
+  const _pad = n => String(n).padStart(2, '0')
+  const timestamp = `${_now.getFullYear()}-${_pad(_now.getMonth()+1)}-${_pad(_now.getDate())} ${_pad(_now.getHours())}:${_pad(_now.getMinutes())}:${_pad(_now.getSeconds())}`
+  const jobId = fileName.replace(/\.md$/, '')
+  const sessionId = makeSessionId()
+
+  const lines = [
+    `# Job Task: ${loopType} loop`,
+    `Started: ${timestamp}`,
+    'Status: In progress',
+    `Repo: ${repo}`,
+    `Session: ${sessionId}`,
+    'Type: loop',
+    `LoopType: ${loopType}`,
+    '',
+    '## Progress',
+    `- [${timestamp}] Loop initiated from dashboard`,
+    '',
+    '## Results',
+    '',
+  ]
+  fs.writeFileSync(filePath, lines.join('\n'), 'utf8')
+
+  // Build shell command
+  const scriptPath = `loops/${loopType}.sh`
+  let shellCommand = `cd "${HUB_DIR}" && bash "${scriptPath}" --repo "${repoConfig.resolvedPath}"`
+  if (loopType === 'parallel-review') {
+    const agents = Array.isArray(reviewerAgents) && reviewerAgents.length > 0 ? reviewerAgents : ['claude']
+    for (const a of agents) shellCommand += ` --agent "${String(a).replace(/"/g, '')}"`
+    if (synthesizerAgent) shellCommand += ` --synthesizer "${String(synthesizerAgent).replace(/"/g, '')}"`
+    if (implementorAgent) shellCommand += ` --implementor "${String(implementorAgent).replace(/"/g, '')}"`
+  } else if (agentSpec) {
+    shellCommand += ` --agent "${String(agentSpec).replace(/"/g, '')}"`
+  }
+
+  ensureRunForJob({ jobId, repo, jobFilePath: filePath, sessionId, state: RUN_STATE.STARTING })
+  createPtySession(sessionId, repoConfig.resolvedPath, repo, filePath, '', null, {
+    agent: 'shell',
+    shellCommand,
+    sessionId,
+    repoName: repo,
+  })
+
+  emitJobsChanged({ repo, id: jobId, reason: 'loop-init' })
+  res.json({ jobId, sessionId, shellCommand })
+})
+
+// ── End loop endpoints ──────────────────────────────────────────────────────
 
 function compareAgentsByStart(a, b) {
   const aTs = a?.started ? Date.parse(a.started) : NaN
@@ -1056,6 +1200,13 @@ const FALLBACK_CLAUDE_MODELS = [
   { value: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5' },
 ]
 
+const FALLBACK_CURSOR_MODELS = [
+  { value: 'claude-4.6-opus-high-thinking', label: 'Claude Opus 4.6 (High Thinking)' },
+  { value: 'claude-opus-4-6', label: 'Claude Opus 4.6' },
+  { value: 'gpt-4.1', label: 'GPT-4.1' },
+  { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
+]
+
 function readCodexModelsCache() {
   const cachePath = path.join(os.homedir(), '.codex', 'models_cache.json')
   try {
@@ -1115,6 +1266,9 @@ app.get('/api/agents/models', async (req, res) => {
       const cached = readCodexModelsCache()
       if (cached) return res.json({ models: cached, source: 'codex-cache' })
       return res.json({ models: FALLBACK_CLAUDE_MODELS, source: 'fallback' })
+    }
+    if (agent === 'cursor') {
+      return res.json({ models: FALLBACK_CURSOR_MODELS, source: 'fallback' })
     }
     return res.json({ models: [], source: 'unknown' })
   } catch {

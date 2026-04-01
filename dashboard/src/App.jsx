@@ -15,6 +15,7 @@ import DispatchView from './components/DispatchView'
 import PlansView from './components/PlansView'
 import SchedulesView from './components/SchedulesView'
 import LoopsView from './components/LoopsView'
+import LoopDetailView from './components/LoopDetailView'
 import SettingsView from './components/SettingsView'
 import CommandPalette from './components/CommandPalette'
 import Toast from './components/Toast'
@@ -54,11 +55,13 @@ export default function App() {
     activeNav,
     setActiveNav,
     drillDownJobId,
+    drillDownLoopId,
     setDrillDownJobId,
     commandPaletteOpen,
     setCommandPaletteOpen,
     handleNavChange,
     openJobDetail,
+    openLoopDetail,
     openDispatch,
     closeJobDetail,
   } = useAppNavigation()
@@ -175,6 +178,22 @@ export default function App() {
 
   const loopCount = (loops.data?.jobs || []).filter(j => j.status === 'in_progress').length
 
+  const loopDetailElement = (
+    <div className="absolute inset-0 z-10">
+      <LoopDetailView
+        loopId={drillDownLoopId}
+        loops={loops.data}
+        onBack={closeJobDetail}
+        agentTerminals={agentTerminals}
+        onKillSession={killSession}
+        onUpdateSessionId={updateSessionId}
+        onPromptSent={markPromptSent}
+        onContextUsage={handleContextUsage}
+        onJobsChanged={handleJobsChanged}
+      />
+    </div>
+  )
+
   const jobDetailElement = (
     <div className="absolute inset-0 z-10">
       <JobDetailView
@@ -241,12 +260,14 @@ export default function App() {
                   />
                 </ScrollableView>
               } />
+              <Route path="/loops/:loopType/:timestamp" element={loopDetailElement} />
               <Route path="/loops" element={
                 <ScrollableView>
                   <LoopsView
                     loops={loops.data}
                     overview={overview.data}
-                    onSelectJob={openJobDetail}
+                    onSelectLoop={openLoopDetail}
+                    onSelectSession={openJobDetail}
                   />
                 </ScrollableView>
               } />

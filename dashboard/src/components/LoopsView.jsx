@@ -87,7 +87,7 @@ function getLoopTypeIcon(loopTypeId) {
   return LOOP_TYPES.find(lt => lt.id === loopTypeId)?.icon || RefreshCcw
 }
 
-export default function LoopsView({ loops, overview, onSelectJob }) {
+export default function LoopsView({ loops, overview, onSelectLoop, onSelectSession }) {
   const jobs = loops?.jobs || []
   const repos = useMemo(() => (overview?.repos || []).map(r => r.name), [overview])
 
@@ -143,14 +143,14 @@ export default function LoopsView({ loops, overview, onSelectJob }) {
       if (!res.ok) {
         throw new Error(data.error || 'Loop launch failed')
       }
-      if (data.sessionId) onSelectJob?.(data.sessionId)
+      if (data.sessionId) onSelectSession?.(data.sessionId)
       setTimeout(() => setBtnPhase('returning'), 1800)
       setTimeout(() => setBtnPhase('idle'), 2400)
     } catch (err) {
       console.error('Loop launch failed:', err)
       setBtnPhase('idle')
     }
-  }, [repo, loopType, prompt, agentSpec, reviewers, synthesizer, implementor, onSelectJob, isReady, btnPhase])
+  }, [repo, loopType, prompt, agentSpec, reviewers, synthesizer, implementor, onSelectSession, isReady, btnPhase])
 
   return (
     <div className="space-y-6">
@@ -170,28 +170,17 @@ export default function LoopsView({ loops, overview, onSelectJob }) {
             const statusColor = STATUS_COLORS[category] || STATUS_COLORS.active
             const duration = job.durationMinutes != null ? timeAgo(null, job.durationMinutes) : null
             const TypeIcon = getLoopTypeIcon(job.loopType)
-            const detailTargetId = job.status === 'in_progress' && job.session ? job.session : null
-            const isClickable = Boolean(detailTargetId)
-
             return (
               <div
                 key={job.id}
-                role={isClickable ? 'button' : undefined}
-                tabIndex={isClickable ? 0 : undefined}
-                onClick={isClickable ? () => onSelectJob?.(detailTargetId) : undefined}
-                onKeyDown={isClickable ? e => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault()
-                    onSelectJob?.(detailTargetId)
-                  }
-                } : undefined}
-                className={cn(
-                  'w-full text-left px-3.5 py-2.5 rounded-lg border bg-card transition-colors group',
-                  isClickable ? 'hover:bg-card-hover cursor-pointer' : 'cursor-default'
-                )}
+                role="button"
+                tabIndex={0}
+                onClick={() => onSelectLoop?.(job.id)}
+                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelectLoop?.(job.id) } }}
+                className="w-full text-left px-3.5 py-2.5 rounded-lg border bg-card hover:bg-card-hover transition-colors group cursor-pointer"
                 style={{ borderColor: 'rgba(255,255,255,0.05)' }}
-                onMouseEnter={isClickable ? e => { e.currentTarget.style.borderColor = 'rgba(139,171,143,0.35)' } : undefined}
-                onMouseLeave={isClickable ? e => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.05)' } : undefined}
+                onMouseEnter={e => { e.currentTarget.style.borderColor = 'rgba(139,171,143,0.35)' }}
+                onMouseLeave={e => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.05)' }}
               >
                 <div className="flex items-center gap-3">
                   <span
@@ -224,7 +213,7 @@ export default function LoopsView({ loops, overview, onSelectJob }) {
                       {job.repo}
                     </span>
                     <span className="text-[11px] text-muted-foreground/40 transition-colors group-hover:text-primary">
-                      {isClickable ? 'View live' : 'Log only'}
+                      View
                     </span>
                   </div>
                 </div>

@@ -22,6 +22,11 @@ export function useAppNavigation() {
     ? decodeURIComponent(segments[1])
     : null
 
+  // drillDownLoopId is derived from URL: /loops/:loopType/:timestamp
+  const drillDownLoopId = segments[0] === 'loops' && segments[1] && segments[2]
+    ? `${decodeURIComponent(segments[1])}/${decodeURIComponent(segments[2])}`
+    : null
+
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
 
   const setActiveNav = useCallback((nav) => {
@@ -38,6 +43,12 @@ export function useAppNavigation() {
 
   const openJobDetail = useCallback((id) => {
     navigate(`/jobs/${encodeURIComponent(id)}`)
+  }, [navigate])
+
+  const openLoopDetail = useCallback((loopId) => {
+    // loopId is like "linear-review/2026-03-31T20:58:52"
+    const parts = loopId.split('/')
+    navigate(`/loops/${encodeURIComponent(parts[0])}/${encodeURIComponent(parts.slice(1).join('/'))}`)
   }, [navigate])
 
   const openDispatch = useCallback(() => {
@@ -60,11 +71,13 @@ export function useAppNavigation() {
     activeNav,
     setActiveNav,
     drillDownJobId,
+    drillDownLoopId,
     setDrillDownJobId,
     commandPaletteOpen,
     setCommandPaletteOpen,
     handleNavChange,
     openJobDetail,
+    openLoopDetail,
     openDispatch,
     closeJobDetail,
   }

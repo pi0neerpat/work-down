@@ -4,6 +4,7 @@
 
 ## 2026-03-31
 
+- **Full loop.log ownership** — eliminated job files for loops; scripts write structured headers (LOOP_SESSION, LOOP_TYPE, LOOP_AGENT, LOOP_STARTED) and LOOP_STATUS to loop.log; added parseLoopRun/parseAllLoopRuns to parsers.js; rewrote /api/loops to scan .dispatch/loops/ dirs; created dedicated LoopDetailView with own /loops/:type/:timestamp route and terminal panel. skills: /done
 - **Re-order the items on the plans details page: Implement - Move to the top, above Edit Edit: - Edit input - Dispatch layout/ordering should match whats on the dispatch page**
 - **Hide Approve and request changes buttons until job is finished**
 - **Worktree directory includes repo name** — updated `createJobWorktree` and `removeJobWorktree` in `dashboard/server.js` to prefix the worktree directory with the repo name (`{repoName}-{jobId}`); added `sanitizeRepoName` and `worktreeDirName` helpers; updated all 5 call sites to pass `repoConfig.name` / `found.repo.name`

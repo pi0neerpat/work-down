@@ -14,6 +14,7 @@ import AllTasksView from './components/AllTasksView'
 import DispatchView from './components/DispatchView'
 import PlansView from './components/PlansView'
 import SchedulesView from './components/SchedulesView'
+import LoopsView from './components/LoopsView'
 import SettingsView from './components/SettingsView'
 import CommandPalette from './components/CommandPalette'
 import Toast from './components/Toast'
@@ -35,6 +36,7 @@ export default function App() {
 
   const overview = usePolling('/api/overview', POLL_INTERVALS.overview)
   const jobs = usePolling('/api/jobs', POLL_INTERVALS.jobs)
+  const loops = usePolling('/api/loops', POLL_INTERVALS.jobs)
   const {
     sessions,
     agentTerminals,
@@ -85,9 +87,10 @@ export default function App() {
     if (now - lastJobsChangedRefreshRef.current < 400) return
     lastJobsChangedRefreshRef.current = now
     jobs.refresh()
+    loops.refresh()
     overview.refresh()
     sessions.refresh()
-  }, [jobs.refresh, overview.refresh, sessions.refresh])
+  }, [jobs.refresh, loops.refresh, overview.refresh, sessions.refresh])
 
   const lastRefresh = overview.lastRefresh || jobs.lastRefresh || sessions.lastRefresh
   const error = overview.error || jobs.error || sessions.error
@@ -170,6 +173,8 @@ export default function App() {
     sessionRecordsForNav,
   })
 
+  const loopCount = (loops.data?.jobs || []).filter(j => j.status === 'in_progress').length
+
   const jobDetailElement = (
     <div className="absolute inset-0 z-10">
       <JobDetailView
@@ -202,6 +207,7 @@ export default function App() {
           onNavChange={handleNavChange}
           jobCount={activeJobCount}
           reviewCount={reviewCount}
+          loopCount={loopCount}
           settingsOpen={settingsOpen}
           onToggleSettings={() => setSettingsOpen(v => !v)}
         />
@@ -230,6 +236,15 @@ export default function App() {
                     swarm={jobs.data}
                     jobFileToSession={jobFileToSession}
                     sessionRecords={sessionRecordsForNav}
+                    overview={overview.data}
+                    onSelectJob={openJobDetail}
+                  />
+                </ScrollableView>
+              } />
+              <Route path="/loops" element={
+                <ScrollableView>
+                  <LoopsView
+                    loops={loops.data}
                     overview={overview.data}
                     onSelectJob={openJobDetail}
                   />

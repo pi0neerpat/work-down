@@ -43,7 +43,7 @@ const require = createRequire(import.meta.url)
 const pty = require('node-pty')
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const {
-  parseTaskFile, parseActivityLog, getGitInfo, parseJobFile, parseJobDir, parsePlansDir, parseFrontmatter, parseSkillsDir, loadConfig, parseLoopState,
+  parseTaskFile, parseActivityLog, getGitInfo, parseJobFile, parseJobDir, parsePlansDir, parseFrontmatter, parseSkillsDir, loadConfig, parseLoopState, parseAllLoopRuns,
   writeTaskDone, writeTaskDoneByText, writeTaskReopenByText, writeTaskAdd, writeTaskEdit, writeTaskMove,
   writeActivityEntry, writeJobValidation, writeJobKill, writeJobStatus, writeJobResults,
   createCheckpoint, revertCheckpoint, dismissCheckpoint, listCheckpoints,
@@ -791,44 +791,50 @@ app.get(['/api/jobs', '/api/swarm'], (req, res) => {
 const VALID_LOOP_TYPES = new Set(['linear-implementation', 'linear-review', 'parallel-review'])
 
 app.get('/api/loops', (req, res) => {
-  const allAgents = collectJobAgents()
-  const latestRunByJob = new Map()
-  for (const run of jobRuns) {
-    if (!run.jobId) continue
-    const prev = latestRunByJob.get(run.jobId)
-    if (!prev || Date.parse(run.updatedAt || run.createdAt || 0) > Date.parse(prev.updatedAt || prev.createdAt || 0)) {
-      latestRunByJob.set(run.jobId, run)
+  const config = getConfig()
+  const loops = []
+  for (const repo of config.repos) {
+    for (const loopType of VALID_LOOP_TYPES) {
+      const typeDir = path.join(repo.resolvedPath, '.dispatch', 'loops', loopType)
+      const runs = parseAllLoopRuns(typeDir)
+      for (const run of runs) {
+        const dirName = path.basename(run.runDir)
+        const id = `${loopType}/${dirName}`
+        const sessionActive = run.session ? ptySessions.has(run.session) : false
+        let status = 'unknown'
+        if (sessionActive) status = 'in_progress'
+        else if (run.loopStatus === 'completed' || run.complete) status = 'completed'
+        else if (run.loopStatus === 'failed') status = 'failed'
+        else if (run.loopStatus) status = run.loopStatus
+
+        let durationMinutes = null
+        if (run.started) {
+          const startMs = Date.parse(run.started)
+          if (Number.isFinite(startMs)) {
+            durationMinutes = Math.round((Date.now() - startMs) / 60000)
+          }
+        }
+
+        loops.push({
+          id,
+          repo: repo.name,
+          loopType: run.loopType || loopType,
+          taskName: `${run.loopType || loopType} loop`,
+          agent: run.agent || 'claude',
+          started: run.started,
+          status,
+          session: run.session,
+          loopState: { iteration: run.iteration, lastVerdict: run.lastVerdict, complete: run.complete, loopStatus: run.loopStatus },
+          durationMinutes,
+        })
+      }
     }
   }
-  const config = getConfig()
-  const repoByName = new Map(config.repos.map(r => [r.name, r]))
-
-  const loops = allAgents
-    .filter(a => a.type === 'loop')
-    .map(a => {
-      const job = {
-        id: a.id,
-        repo: a.repo,
-        taskName: a.taskName,
-        agent: a.agent || 'claude',
-        started: a.started,
-        status: a.status,
-        validation: a.validation,
-        lastProgress: a.lastProgress,
-        progressCount: a.progressCount,
-        durationMinutes: a.durationMinutes,
-        skills: a.skills,
-        session: latestRunByJob.get(a.id)?.sessionId || a.session,
-        runState: latestRunByJob.get(a.id)?.state || null,
-        loopType: a.loopType || null,
-      }
-      const repoConfig = repoByName.get(a.repo)
-      if (repoConfig && a.loopType) {
-        const loopDir = path.join(repoConfig.resolvedPath, '.dispatch', 'loops', a.loopType)
-        job.loopState = parseLoopState(loopDir)
-      }
-      return job
-    })
+  loops.sort((a, b) => {
+    const aTs = a.started ? Date.parse(a.started) : 0
+    const bTs = b.started ? Date.parse(b.started) : 0
+    return bTs - aTs
+  })
   res.json({ jobs: loops, agents: loops })
 })
 
@@ -873,38 +879,11 @@ app.post('/api/loops/init', (req, res) => {
     fs.writeFileSync(promptPath, promptContent, 'utf8')
   }
 
-  // Create job file
-  const date = new Date().toISOString().slice(0, 10)
-  const jobsDir = path.join(repoConfig.resolvedPath, 'notes', 'jobs')
-  fs.mkdirSync(jobsDir, { recursive: true })
-  const slug = loopType.slice(0, 50)
-  const { fileName, filePath } = allocateUniqueJobFile({ jobsDir, datePrefix: date, slug })
-  const _now = new Date()
-  const _pad = n => String(n).padStart(2, '0')
-  const timestamp = `${_now.getFullYear()}-${_pad(_now.getMonth()+1)}-${_pad(_now.getDate())} ${_pad(_now.getHours())}:${_pad(_now.getMinutes())}:${_pad(_now.getSeconds())}`
-  const jobId = fileName.replace(/\.md$/, '')
   const sessionId = makeSessionId()
 
-  const lines = [
-    `# Job Task: ${loopType} loop`,
-    `Started: ${timestamp}`,
-    'Status: In progress',
-    `Repo: ${repo}`,
-    `Session: ${sessionId}`,
-    'Type: loop',
-    `LoopType: ${loopType}`,
-    '',
-    '## Progress',
-    `- [${timestamp}] Loop initiated from dashboard`,
-    '',
-    '## Results',
-    '',
-  ]
-  fs.writeFileSync(filePath, lines.join('\n'), 'utf8')
-
-  // Build shell command
+  // Build shell command — no job file, loop.log is the source of truth
   const scriptPath = `loops/${loopType}.sh`
-  let shellCommand = `cd "${HUB_DIR}" && bash "${scriptPath}" --repo "${repoConfig.resolvedPath}"`
+  let shellCommand = `cd "${HUB_DIR}" && bash "${scriptPath}" --repo "${repoConfig.resolvedPath}" --session "${sessionId}"`
   if (loopType === 'parallel-review') {
     const agents = Array.isArray(reviewerAgents) && reviewerAgents.length > 0 ? reviewerAgents : ['claude']
     for (const a of agents) shellCommand += ` --agent "${String(a).replace(/"/g, '')}"`
@@ -914,16 +893,16 @@ app.post('/api/loops/init', (req, res) => {
     shellCommand += ` --agent "${String(agentSpec).replace(/"/g, '')}"`
   }
 
-  ensureRunForJob({ jobId, repo, jobFilePath: filePath, sessionId, state: RUN_STATE.STARTING })
-  createPtySession(sessionId, repoConfig.resolvedPath, repo, filePath, '', null, {
+  ensureRunForJob({ jobId: sessionId, repo, jobFilePath: null, sessionId, state: RUN_STATE.STARTING })
+  createPtySession(sessionId, repoConfig.resolvedPath, repo, null, '', null, {
     agent: 'shell',
     shellCommand,
     sessionId,
     repoName: repo,
   })
 
-  emitJobsChanged({ repo, id: jobId, reason: 'loop-init' })
-  res.json({ jobId, sessionId, shellCommand })
+  emitJobsChanged({ repo, id: sessionId, reason: 'loop-init' })
+  res.json({ sessionId, shellCommand })
 })
 
 // ── End loop endpoints ──────────────────────────────────────────────────────

@@ -128,6 +128,7 @@ function parseJobFile(filePath) {
   let resumeId = null, resumeCommand = null;
   let ai = null;
   let branch = null, worktreePath = null, startCommit = null, baseBranch = null;
+  let type = null, loopType = null;
   const progressEntries = [];
   let results = null;
   let validationNotes = null;
@@ -203,6 +204,12 @@ function parseJobFile(filePath) {
       const baseBranchMatch = line.match(/^BaseBranch:\s*(.+)/);
       if (baseBranchMatch) { baseBranch = baseBranchMatch[1].trim(); continue; }
 
+      const typeMatch = line.match(/^Type:\s*(.+)/);
+      if (typeMatch) { type = typeMatch[1].trim().toLowerCase(); continue; }
+
+      const loopTypeMatch = line.match(/^LoopType:\s*(.+)/);
+      if (loopTypeMatch) { loopType = loopTypeMatch[1].trim(); continue; }
+
       // Section detection
       const sectionMatch = line.match(/^##\s+(.+)/);
       if (sectionMatch) {
@@ -231,7 +238,7 @@ function parseJobFile(filePath) {
   let durationMinutes = null;
   if (started) {
     const normalized = started.includes('T') ? started : started.replace(' ', 'T');
-    const startDate = new Date(normalized.endsWith('Z') ? normalized : normalized + 'Z');
+    const startDate = new Date(normalized);
     if (!isNaN(startDate.getTime())) {
       durationMinutes = Math.round((Date.now() - startDate.getTime()) / 60000);
     }
@@ -244,6 +251,7 @@ function parseJobFile(filePath) {
     agent,
     originalTask, originalPrompt, session, skipPermissions, resumeId, resumeCommand, repo, planSlug,
     branch, worktreePath, startCommit, baseBranch,
+    type, loopType,
     lastProgress, progressCount, durationMinutes, resultsSummary,
     progressEntries, results, validationNotes, rawContent,
   };
@@ -256,6 +264,75 @@ function parseJobDir(dirPath) {
   } catch {
     return [];
   }
+}
+
+function parseLoopRun(runDir) {
+  let session = null, loopType = null, agent = null, started = null;
+  let iteration = 0, lastVerdict = null, complete = false, loopStatus = null;
+  try {
+    const logPath = path.join(runDir, 'loop.log');
+    const content = fs.readFileSync(logPath, 'utf8');
+    const lines = content.split('\n');
+    let pastHeader = false;
+    for (const line of lines) {
+      // Parse structured header (before --- separator)
+      if (!pastHeader) {
+        if (line.trim() === '---') { pastHeader = true; continue; }
+        const hm = line.match(/^LOOP_SESSION:\s*(.+)/);
+        if (hm) { session = hm[1].trim(); continue; }
+        const tm = line.match(/^LOOP_TYPE:\s*(.+)/);
+        if (tm) { loopType = tm[1].trim(); continue; }
+        const am = line.match(/^LOOP_AGENT:\s*(.+)/);
+        if (am) { agent = am[1].trim(); continue; }
+        const sm = line.match(/^LOOP_STARTED:\s*(.+)/);
+        if (sm) { started = sm[1].trim(); continue; }
+        continue;
+      }
+      // Parse body
+      const iterMatch = line.match(/Iteration\s+(\d+)/i);
+      if (iterMatch) iteration = parseInt(iterMatch[1], 10);
+      if (line.includes('ALL PHASES COMPLETE')) { lastVerdict = 'ALL PHASES COMPLETE'; complete = true; }
+      else if (line.includes('ALL ISSUES RESOLVED')) { lastVerdict = 'ALL ISSUES RESOLVED'; complete = true; }
+      else if (line.includes('VERIFIED: PASS')) lastVerdict = 'VERIFIED: PASS';
+      else if (line.includes('VERDICT: PASS')) lastVerdict = 'VERDICT: PASS';
+      else if (line.includes('VERDICT: FAIL')) lastVerdict = 'VERDICT: FAIL';
+      const statusMatch = line.match(/^LOOP_STATUS:\s*(.+)/);
+      if (statusMatch) {
+        loopStatus = statusMatch[1].trim();
+        if (loopStatus === 'completed') complete = true;
+      }
+    }
+  } catch { /* log missing */ }
+  return { session, loopType, agent, started, iteration, lastVerdict, complete, loopStatus, runDir };
+}
+
+function parseAllLoopRuns(typeDir) {
+  const runs = [];
+  try {
+    const subdirs = fs.readdirSync(typeDir)
+      .filter(d => /^\d{4}-\d{2}-\d{2}T/.test(d))
+      .sort()
+      .reverse();
+    for (const d of subdirs) {
+      runs.push(parseLoopRun(path.join(typeDir, d)));
+    }
+  } catch { /* dir missing */ }
+  return runs;
+}
+
+function parseLoopState(loopDir) {
+  let iteration = 0, lastVerdict = null, complete = false, runDir = null;
+  try {
+    const subdirs = fs.readdirSync(loopDir)
+      .filter(d => /^\d{4}-\d{2}-\d{2}T/.test(d))
+      .sort()
+      .reverse();
+    if (subdirs.length === 0) return { iteration, lastVerdict, complete, runDir };
+    runDir = path.join(loopDir, subdirs[0]);
+    const run = parseLoopRun(runDir);
+    return { iteration: run.iteration, lastVerdict: run.lastVerdict, complete: run.complete, runDir };
+  } catch { /* dir or log missing */ }
+  return { iteration, lastVerdict, complete, runDir };
 }
 
 function loadConfig(hubDir) {
@@ -1358,4 +1435,7 @@ module.exports = {
   revertCheckpoint,
   dismissCheckpoint,
   listCheckpoints,
+  parseLoopRun,
+  parseAllLoopRuns,
+  parseLoopState,
 };

@@ -399,7 +399,7 @@ Notes on validation status.
 Header fields (parsed from line-level patterns, not YAML frontmatter):
 - `# Job Task: <name>` — Preferred task title header.
 - `# Swarm Task: <name>` — Legacy header still accepted by parsers.
-- `Started: <date>` — ISO date string.
+- `Started: <date>` — Local-time timestamp, no timezone suffix (e.g. `2026-03-31 16:39:56`). **See Timestamp Rules below.**
 - `Status: <value>` — Normalized to: `in_progress`, `completed`, `failed`, or the raw lowercase value.
 - `Validation: <value>` — Optional. Values like `needs_validation`, `validated`, `rejected`.
 - `Session: <id>` — PTY session ID used by the dashboard to reconnect/resume.
@@ -415,6 +415,25 @@ The file ID is derived from the filename (minus `.md` extension):
 e.g., `2026-03-11-create-claude-md.md` becomes ID `2026-03-11-create-claude-md`.
 
 The dashboard still reads legacy `notes/swarm/` directories and parser aliases, but new work should be written to `notes/jobs/`.
+
+### Timestamp Rules
+
+All timestamps written by this codebase (job files, activity logs) are **local machine time with no timezone suffix**.
+
+**Do not append `Z` or any UTC offset when parsing them.** JavaScript's `new Date()` interprets a string without a timezone suffix as local time, which is correct. Appending `Z` forces UTC interpretation and produces wrong relative times for users in non-UTC timezones.
+
+```js
+// ✅ Correct — parsed as local time
+const d = new Date(started.replace(' ', 'T'))
+
+// ❌ Wrong — forces UTC, will be hours off
+const d = new Date(started.replace(' ', 'T') + 'Z')
+```
+
+This applies everywhere timestamps are compared to `Date.now()`:
+- `parsers.js` `parseJobFile` → `durationMinutes`
+- `dashboard/src/lib/utils.js` `timeAgo`
+- Any new code that computes elapsed time from a stored timestamp
 
 ---
 

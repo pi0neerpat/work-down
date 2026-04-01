@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 
-const NAV_ITEMS = ['status', 'jobs', 'tasks', 'plans', 'dispatch', 'schedules']
+const NAV_ITEMS = ['status', 'jobs', 'loops', 'tasks', 'plans', 'dispatch', 'schedules']
 
 /** Derive the activeNav tab from the current URL pathname. */
 export function navFromPath(pathname) {

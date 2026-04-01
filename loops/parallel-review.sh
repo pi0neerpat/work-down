@@ -3,7 +3,7 @@
 # Fans out to multiple reviewer agents, synthesizes findings, implements fixes,
 # and verifies until all issues are resolved.
 #
-# Usage (from dispatch/): loops/parallel-review.sh --repo <path> [--agent tool[:model]]...
+# Usage (from dispatch/): loops/parallel-review.sh --repo <path> [--agent tool[:model]]... [--session <id>]
 #
 # ── Available models ────────────────────────────────────────────────────────
 #
@@ -79,6 +79,7 @@ REPO=""
 REVIEWER_AGENTS=()
 SYNTHESIZER_AGENT="claude"
 IMPLEMENTOR_AGENT="claude"
+SESSION_ID=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -86,6 +87,7 @@ while [[ $# -gt 0 ]]; do
     --agent)       REVIEWER_AGENTS+=("$2"); shift 2 ;;
     --synthesizer) SYNTHESIZER_AGENT="$2";  shift 2 ;;
     --implementor) IMPLEMENTOR_AGENT="$2";  shift 2 ;;
+    --session)     SESSION_ID="$2"; shift 2 ;;
     *) echo "Unknown argument: $1" >&2; exit 1 ;;
   esac
 done
@@ -114,8 +116,20 @@ fi
 
 LOG_FILE="$RUN_DIR/loop.log"
 
+# Write structured header before redirecting output
+cat > "$LOG_FILE" <<EOF
+LOOP_SESSION: ${SESSION_ID}
+LOOP_TYPE: parallel-review
+LOOP_AGENT: ${REVIEWER_AGENTS[*]}
+LOOP_STARTED: $(date '+%Y-%m-%d %H:%M:%S')
+---
+EOF
+
 # Tee all output to log file, still prints live to terminal
 exec > >(tee -a "$LOG_FILE") 2>&1
+
+# Write LOOP_STATUS on unexpected exit
+trap 'echo "LOOP_STATUS: failed"' ERR
 
 # ---------------------------------------------------------------------------
 # Prompt templates
@@ -260,6 +274,7 @@ while true; do
 
   if [[ -z "$diff" ]]; then
     echo "(nothing to review — no changes since start)"
+    echo "LOOP_STATUS: completed"
     exit 0
   fi
 
@@ -315,6 +330,7 @@ ${combined_reviews}"
   if echo "$synthesis" | grep -qx "ALL ISSUES RESOLVED"; then
     echo ""
     echo "All issues resolved. Loop done."
+    echo "LOOP_STATUS: completed"
     exit 0
   fi
 

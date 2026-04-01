@@ -1,10 +1,13 @@
-import { Sparkles } from 'lucide-react'
+import { Sparkles, MousePointer2 } from 'lucide-react'
 import clawdIcon from '../clawd.png'
 import { getAgentBrandColor, normalizeAgentId } from '../lib/constants'
 import { cn } from '../lib/utils'
 
 function labelForAgent(agentId) {
-  return normalizeAgentId(agentId) === 'codex' ? 'Codex' : 'Claude'
+  const normalized = normalizeAgentId(agentId)
+  if (normalized === 'codex') return 'Codex'
+  if (normalized === 'cursor') return 'Cursor'
+  return 'Claude'
 }
 
 export function getAgentLabel(agentId) {
@@ -25,6 +28,17 @@ export default function AgentIcon({ agent = 'claude', size = 14, className, colo
         title={title || `${label} icon`}
         className={cn('shrink-0 object-contain', className)}
         style={style}
+      />
+    )
+  }
+
+  if (normalizedAgent === 'cursor') {
+    return (
+      <MousePointer2
+        size={size}
+        title={title || `${label} icon`}
+        className={className}
+        style={{ color: color || getAgentBrandColor(normalizedAgent), ...style }}
       />
     )
   }

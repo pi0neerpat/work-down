@@ -60,3 +60,4 @@ plans/
 
 # Hide personal notes
 notes/
+.dispatch

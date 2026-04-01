@@ -3,7 +3,7 @@
 # Runs an implementor agent on <repo>/.dispatch/loops/linear-implementation/prompt.md
 # until all phases are complete, with a review/fixup cycle after each phase.
 #
-# Usage (from dispatch/): loops/linear-implementation.sh --repo <path> [--agent tool[:model]]
+# Usage (from dispatch/): loops/linear-implementation.sh --repo <path> [--agent tool[:model]] [--session <id>]
 
 set -euo pipefail
 
@@ -22,11 +22,13 @@ DEFAULT_CURSOR_MODEL="claude-4.6-opus-high-thinking"
 # ---------------------------------------------------------------------------
 REPO=""
 AGENT_SPEC=""
+SESSION_ID=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --repo)  REPO="$(cd "$2" && pwd)"; shift 2 ;;
-    --agent) AGENT_SPEC="$2"; shift 2 ;;
+    --repo)    REPO="$(cd "$2" && pwd)"; shift 2 ;;
+    --agent)   AGENT_SPEC="$2"; shift 2 ;;
+    --session) SESSION_ID="$2"; shift 2 ;;
     *) shift ;;
   esac
 done
@@ -62,8 +64,20 @@ fi
 
 LOG_FILE="$RUN_DIR/loop.log"
 
+# Write structured header before redirecting output
+cat > "$LOG_FILE" <<EOF
+LOOP_SESSION: ${SESSION_ID}
+LOOP_TYPE: linear-implementation
+LOOP_AGENT: ${AGENT_SPEC}
+LOOP_STARTED: $(date '+%Y-%m-%d %H:%M:%S')
+---
+EOF
+
 # Tee all output to log file, still prints live to terminal
 exec > >(tee -a "$LOG_FILE") 2>&1
+
+# Write LOOP_STATUS on unexpected exit
+trap 'echo "LOOP_STATUS: failed"' ERR
 
 # Snapshot the prompt used for this run
 cp "$PROMPT_FILE" "$RUN_DIR/prompt.md"
@@ -187,6 +201,7 @@ while true; do
   if echo "$output" | grep -qx "ALL PHASES COMPLETE"; then
     echo ""
     echo "All phases complete. Loop done."
+    echo "LOOP_STATUS: completed"
     exit 0
   fi
 

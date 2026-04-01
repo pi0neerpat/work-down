@@ -9,6 +9,8 @@
 - **Worktree directory includes repo name** — updated `createJobWorktree` and `removeJobWorktree` in `dashboard/server.js` to prefix the worktree directory with the repo name (`{repoName}-{jobId}`); added `sanitizeRepoName` and `worktreeDirName` helpers; updated all 5 call sites to pass `repoConfig.name` / `found.repo.name`
 - **Have "done" plans appear last in the group sorting on the plan page**
   - skills: /done
+- **Loops tab improvements** — added `--agent tool[:model]` flag to `linear-implementation.sh` and `linear-review.sh` with `run_agent()` supporting claude/codex/cursor; added Cursor as a third agent in constants, AgentIcon, useAgentModels, and server; updated `LoopsView.jsx` with loop-type icons, per-type agent picker, glow launch button, and prompt fetch abort controller. skills: /done
+- **Fix loop job timestamp offset** — removed `+ 'Z'` from `parsers.js` `parseJobFile` that was treating local timestamps as UTC, causing `durationMinutes` to be hours off; added Timestamp Rules section to `docs/coding-standards.md`. skills: /done
 
 ---
 

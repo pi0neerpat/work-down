@@ -1,16 +1,17 @@
-import { Activity, Bot, ListTodo, Send, CalendarClock, Settings, ArrowLeft, Map } from 'lucide-react'
+import { Activity, Bot, ListTodo, Send, CalendarClock, Settings, ArrowLeft, Map, RefreshCcw } from 'lucide-react'
 import { cn } from '../lib/utils'
 
 const NAV_ITEMS = [
   { id: 'dispatch', label: 'Dispatch', icon: Send },
   { id: 'jobs', label: 'Jobs', icon: Bot },
+  { id: 'loops', label: 'Loops', icon: RefreshCcw },
   { id: 'tasks', label: 'Tasks', icon: ListTodo },
   { id: 'plans', label: 'Plans', icon: Map },
   { id: 'schedules', label: 'Schedules', icon: CalendarClock },
   { id: 'status', label: 'Status', icon: Activity },
 ]
 
-export default function ActivityBar({ activeNav, onNavChange, jobCount = 0, reviewCount = 0, settingsOpen = false, onToggleSettings }) {
+export default function ActivityBar({ activeNav, onNavChange, jobCount = 0, reviewCount = 0, loopCount = 0, settingsOpen = false, onToggleSettings }) {
   if (settingsOpen) {
     return (
       <aside className="w-[160px] shrink-0 border-r border-border bg-background flex flex-col pt-1">
@@ -40,7 +41,7 @@ export default function ActivityBar({ activeNav, onNavChange, jobCount = 0, revi
       {NAV_ITEMS.map(item => {
         const Icon = item.icon
         const isActive = activeNav === item.id
-        const badge = item.id === 'jobs' ? jobCount : item.id === 'status' && reviewCount > 0 ? reviewCount : 0
+        const badge = item.id === 'jobs' ? jobCount : item.id === 'loops' ? loopCount : item.id === 'status' && reviewCount > 0 ? reviewCount : 0
 
         return (
           <button

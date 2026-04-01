@@ -35,27 +35,41 @@ export const CODEX_MODEL_OPTIONS = [
 ]
 
 /**
+ * Available Cursor models. Keep in sync with server.js FALLBACK_CURSOR_MODELS.
+ */
+export const CURSOR_MODEL_OPTIONS = [
+  { value: 'claude-4.6-opus-high-thinking', label: 'Claude Opus 4.6 (High Thinking)' },
+  { value: 'claude-opus-4-6', label: 'Claude Opus 4.6' },
+  { value: 'gpt-4.1', label: 'GPT-4.1' },
+  { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
+]
+
+/**
  * Supported agent providers.
  */
 export const AGENT_OPTIONS = [
   { id: 'claude', label: 'Claude' },
   { id: 'codex', label: 'Codex' },
+  { id: 'cursor', label: 'Cursor' },
 ]
 
 /**
  * Agent brand colors.
- * Claude: Anthropic accent-brand. Codex: OpenAI discovery purple.
+ * Claude: Anthropic accent-brand. Codex: OpenAI discovery purple. Cursor: brand blue.
  */
 export const AGENT_BRAND_COLORS = {
   claude: '#D97757',
   codex: '#924FF7',
+  cursor: '#2B7FFF',
 }
 
 /**
  * Normalizes unknown values to a supported agent id.
  */
 export function normalizeAgentId(agent) {
-  return agent === 'codex' ? 'codex' : 'claude'
+  if (agent === 'codex') return 'codex'
+  if (agent === 'cursor') return 'cursor'
+  return 'claude'
 }
 
 /**

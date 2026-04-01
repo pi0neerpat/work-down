@@ -20,7 +20,7 @@ function AgentModelPicker({ label, value, onChange }) {
     if (models.length > 0 && !models.find(m => m.value === value.model)) {
       onChange({ ...value, model: models[0].value })
     }
-  }, [models, value.agent])
+  }, [models, onChange, value])
 
   return (
     <div>
@@ -70,11 +70,9 @@ function fmtAgent({ agent, model }) {
 }
 
 function classifyLoop(job) {
-  if (job.runState === 'validated') return 'completed'
-  if (job.runState === 'rejected') return 'rejected'
+  if (job.status === 'completed' || job.loopState?.complete) return 'completed'
+  if (job.status === 'failed') return 'failed'
   if (job.status === 'in_progress') return 'active'
-  if (job.status === 'completed') return 'completed'
-  if (job.status === 'failed' || job.status === 'killed') return 'failed'
   return 'active'
 }
 
@@ -141,8 +139,11 @@ export default function LoopsView({ loops, overview, onSelectJob }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       })
-      const data = await res.json()
-      if (data.jobId) onSelectJob?.(data.jobId)
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        throw new Error(data.error || 'Loop launch failed')
+      }
+      if (data.sessionId) onSelectJob?.(data.sessionId)
       setTimeout(() => setBtnPhase('returning'), 1800)
       setTimeout(() => setBtnPhase('idle'), 2400)
     } catch (err) {
@@ -169,18 +170,28 @@ export default function LoopsView({ loops, overview, onSelectJob }) {
             const statusColor = STATUS_COLORS[category] || STATUS_COLORS.active
             const duration = job.durationMinutes != null ? timeAgo(null, job.durationMinutes) : null
             const TypeIcon = getLoopTypeIcon(job.loopType)
+            const detailTargetId = job.status === 'in_progress' && job.session ? job.session : null
+            const isClickable = Boolean(detailTargetId)
 
             return (
               <div
                 key={job.id}
-                role="button"
-                tabIndex={0}
-                onClick={() => onSelectJob?.(job.id)}
-                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelectJob?.(job.id) } }}
-                className="w-full text-left px-3.5 py-2.5 rounded-lg border bg-card hover:bg-card-hover transition-colors group cursor-pointer"
+                role={isClickable ? 'button' : undefined}
+                tabIndex={isClickable ? 0 : undefined}
+                onClick={isClickable ? () => onSelectJob?.(detailTargetId) : undefined}
+                onKeyDown={isClickable ? e => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    onSelectJob?.(detailTargetId)
+                  }
+                } : undefined}
+                className={cn(
+                  'w-full text-left px-3.5 py-2.5 rounded-lg border bg-card transition-colors group',
+                  isClickable ? 'hover:bg-card-hover cursor-pointer' : 'cursor-default'
+                )}
                 style={{ borderColor: 'rgba(255,255,255,0.05)' }}
-                onMouseEnter={e => e.currentTarget.style.borderColor = 'rgba(139,171,143,0.35)'}
-                onMouseLeave={e => e.currentTarget.style.borderColor = 'rgba(255,255,255,0.05)'}
+                onMouseEnter={isClickable ? e => { e.currentTarget.style.borderColor = 'rgba(139,171,143,0.35)' } : undefined}
+                onMouseLeave={isClickable ? e => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.05)' } : undefined}
               >
                 <div className="flex items-center gap-3">
                   <span
@@ -212,7 +223,9 @@ export default function LoopsView({ loops, overview, onSelectJob }) {
                     >
                       {job.repo}
                     </span>
-                    <span className="text-[11px] text-muted-foreground/40 group-hover:text-primary transition-colors">View</span>
+                    <span className="text-[11px] text-muted-foreground/40 transition-colors group-hover:text-primary">
+                      {isClickable ? 'View live' : 'Log only'}
+                    </span>
                   </div>
                 </div>
               </div>

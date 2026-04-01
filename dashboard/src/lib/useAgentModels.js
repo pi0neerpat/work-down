@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { MODEL_OPTIONS, CODEX_MODEL_OPTIONS } from './constants'
+import { MODEL_OPTIONS, CODEX_MODEL_OPTIONS, CURSOR_MODEL_OPTIONS } from './constants'
 
 /**
  * Fetches available models for the given agent from the server, which queries
@@ -7,11 +7,14 @@ import { MODEL_OPTIONS, CODEX_MODEL_OPTIONS } from './constants'
  * key isn't set or the request fails.
  */
 export function useAgentModels(agent) {
-  const fallback = agent === 'codex' ? CODEX_MODEL_OPTIONS : MODEL_OPTIONS
+  const fallback = agent === 'codex' ? CODEX_MODEL_OPTIONS
+                 : agent === 'cursor' ? CURSOR_MODEL_OPTIONS
+                 : MODEL_OPTIONS
   const [models, setModels] = useState(fallback)
 
   useEffect(() => {
     let cancelled = false
+    setModels(fallback)
     fetch(`/api/agents/models?agent=${encodeURIComponent(agent)}`)
       .then(r => r.ok ? r.json() : null)
       .then(data => {
@@ -21,7 +24,7 @@ export function useAgentModels(agent) {
       })
       .catch(() => {})
     return () => { cancelled = true }
-  }, [agent])
+  }, [agent, fallback])
 
   return models
 }

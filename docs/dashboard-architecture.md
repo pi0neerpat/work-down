@@ -96,6 +96,7 @@ The dashboard is the canonical job runtime. It reads both `notes/jobs/` and lega
 | Endpoint | parsers.js Functions Used |
 |----------|--------------------------|
 | `GET /api/config` | `loadConfig` |
+| `GET /api/catalog` | `loadConfig` + `getModelsForAgent` (per-agent model lists) — repos, agent kinds, models |
 | `GET /api/overview` | `parseTaskFile`, `parseActivityLog`, `getGitInfo`, `listCheckpoints` |
 | `GET /api/jobs` and legacy `GET /api/swarm` | `parseJobDir` |
 | `GET /api/jobs/:id` and legacy `GET /api/swarm/:id` | `parseJobFile` |

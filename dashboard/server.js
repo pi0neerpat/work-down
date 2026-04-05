@@ -1,12 +1,16 @@
 // ── Security / Threat Model ──────────────────────────────
-// This server is designed as a **single-user localhost tool**.
+// This server is designed as a **single-user localhost tool** by default.
 //
 // Trust boundary:
-//   - Binds to 127.0.0.1 only — not reachable from the LAN.
-//   - CORS restricts HTTP API access to the dashboard's own origin.
-//   - WebSocket connections are validated against the same origin allowlist.
+//   - Binds to 127.0.0.1 only unless `DISPATCH_BIND` is set (e.g. 0.0.0.0 for LAN).
+//   - Optional `DISPATCH_API_KEY`: required on all `/api/*` HTTP routes and `/ws/terminal`
+//     when set (Bearer, X-API-Key, or `apiKey` query on WebSocket).
+//   - CORS restricts browser API access to the dashboard's own origin (no origin = allowed).
+//   - WebSocket connections are validated against the same origin allowlist after auth.
 //
-// If you need to expose this on a shared machine or LAN, you MUST add:
+// If you expose this on a LAN, you MUST set `DISPATCH_API_KEY` and prefer TLS in front.
+//
+// Legacy note — if you need to expose without the below, you MUST add:
 //   1. Authentication on all HTTP and WebSocket routes.
 //   2. Per-user authorization for destructive operations (job control, merge,
 //      checkpoint, session management).
@@ -53,6 +57,10 @@ const {
 
 const HUB_DIR = process.env.HUB_DIR ? path.resolve(process.env.HUB_DIR) : path.resolve(__dirname, '..')
 const PORT = process.env.PORT || 3747
+/** When set, all `/api/*` requests must send this key (Bearer or X-API-Key). */
+const DISPATCH_API_KEY = (process.env.DISPATCH_API_KEY || '').trim()
+/** Listen address (default 127.0.0.1). Use e.g. 0.0.0.0 for LAN access behind a firewall + API key. */
+const DISPATCH_BIND = (process.env.DISPATCH_BIND || '127.0.0.1').trim()
 const RUNTIME_DIR = path.join(HUB_DIR, '.hub-runtime')
 const JOB_RUNS_FILE = path.join(RUNTIME_DIR, 'job-runs.json')
 const PROMPTS_DIR = path.join(RUNTIME_DIR, 'prompts')
@@ -581,6 +589,37 @@ app.param('name', (req, res, next, value) => {
   // Repo names: simple alphanumeric + hyphens/underscores
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,100}$/.test(value) || value.includes('..')) {
     return res.status(400).json({ error: `Invalid name parameter: ${value.slice(0, 80)}` })
+  }
+  next()
+})
+
+function extractApiKeyFromRequest(req) {
+  const x = req.headers['x-api-key']
+  if (x && typeof x === 'string') return x.trim()
+  const auth = req.headers.authorization
+  if (auth && typeof auth === 'string' && auth.startsWith('Bearer ')) return auth.slice(7).trim()
+  return ''
+}
+
+function extractApiKeyFromWsRequest(req) {
+  try {
+    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`)
+    const q = url.searchParams.get('apiKey')
+    if (q) return q.trim()
+  } catch { /* ignore */ }
+  const x = req.headers['x-api-key']
+  if (x && typeof x === 'string') return x.trim()
+  const auth = req.headers.authorization
+  if (auth && typeof auth === 'string' && auth.startsWith('Bearer ')) return auth.slice(7).trim()
+  return ''
+}
+
+app.use((req, res, next) => {
+  if (!req.path.startsWith('/api/')) return next()
+  if (!DISPATCH_API_KEY) return next()
+  const key = extractApiKeyFromRequest(req)
+  if (key !== DISPATCH_API_KEY) {
+    return res.status(401).json({ error: 'Unauthorized' })
   }
   next()
 })
@@ -1352,13 +1391,15 @@ function readClaudeOAuthToken() {
   }
 }
 
-app.get('/api/agents/models', async (req, res) => {
-  const { agent = 'claude' } = req.query
+const DISPATCH_AGENT_KINDS = ['claude', 'codex', 'cursor']
+const DISPATCH_AGENT_LABELS = { claude: 'Claude', codex: 'Codex', cursor: 'Cursor' }
+
+async function getModelsForAgent(agent) {
+  const a = String(agent || 'claude')
   try {
-    if (agent === 'claude') {
-      // Prefer env API key, fall back to Claude Code's stored OAuth token
+    if (a === 'claude') {
       const apiKey = process.env.ANTHROPIC_API_KEY || readClaudeOAuthToken()
-      if (!apiKey) return res.json({ models: FALLBACK_CLAUDE_MODELS, source: 'fallback' })
+      if (!apiKey) return { models: FALLBACK_CLAUDE_MODELS, source: 'fallback' }
       const response = await fetch('https://api.anthropic.com/v1/models?limit=100', {
         headers: {
           'x-api-key': apiKey,
@@ -1366,26 +1407,60 @@ app.get('/api/agents/models', async (req, res) => {
           'anthropic-beta': 'oauth-2023-09-01',
         },
       })
-      if (!response.ok) return res.json({ models: FALLBACK_CLAUDE_MODELS, source: 'fallback' })
+      if (!response.ok) return { models: FALLBACK_CLAUDE_MODELS, source: 'fallback' }
       const data = await response.json()
       const models = (data.data || [])
         .filter(m => m.id.startsWith('claude') && !m.id.endsWith('-latest'))
         .sort((a, b) => b.id.localeCompare(a.id))
         .map(m => ({ value: m.id, label: m.display_name || m.id }))
-      return res.json({ models: models.length > 0 ? models : FALLBACK_CLAUDE_MODELS, source: 'api' })
+      return { models: models.length > 0 ? models : FALLBACK_CLAUDE_MODELS, source: 'api' }
     }
-    if (agent === 'codex') {
-      // Read directly from Codex's own models cache — same source as the Codex TUI
+    if (a === 'codex') {
       const cached = readCodexModelsCache()
-      if (cached) return res.json({ models: cached, source: 'codex-cache' })
-      return res.json({ models: FALLBACK_CLAUDE_MODELS, source: 'fallback' })
+      if (cached) return { models: cached, source: 'codex-cache' }
+      return { models: FALLBACK_CLAUDE_MODELS, source: 'fallback' }
     }
-    if (agent === 'cursor') {
-      return res.json({ models: FALLBACK_CURSOR_MODELS, source: 'fallback' })
+    if (a === 'cursor') {
+      return { models: FALLBACK_CURSOR_MODELS, source: 'fallback' }
     }
-    return res.json({ models: [], source: 'unknown' })
+    return { models: [], source: 'unknown' }
   } catch {
-    return res.json({ models: FALLBACK_CLAUDE_MODELS, source: 'fallback' })
+    return { models: FALLBACK_CLAUDE_MODELS, source: 'fallback' }
+  }
+}
+
+app.get('/api/agents/models', async (req, res) => {
+  const { agent = 'claude' } = req.query
+  const result = await getModelsForAgent(agent)
+  res.json({ models: result.models, source: result.source })
+})
+
+app.get('/api/catalog', async (req, res) => {
+  try {
+    const config = getConfig()
+    const repos = config.repos.map(r => ({
+      name: r.name,
+      path: r.path,
+      taskFile: r.taskFile,
+      activityFile: r.activityFile,
+      ...(r.bugsFile ? { bugsFile: r.bugsFile } : {}),
+    }))
+    const models = {}
+    const modelSources = {}
+    for (const agent of DISPATCH_AGENT_KINDS) {
+      const result = await getModelsForAgent(agent)
+      models[agent] = result.models
+      modelSources[agent] = result.source
+    }
+    res.json({
+      hubRoot: config.hubRoot || HUB_DIR,
+      repos,
+      agents: DISPATCH_AGENT_KINDS.map(id => ({ id, label: DISPATCH_AGENT_LABELS[id] || id })),
+      models,
+      modelSources,
+    })
+  } catch (err) {
+    res.status(500).json({ error: err?.message || 'catalog failed' })
   }
 })
 
@@ -2400,9 +2475,8 @@ if (fs.existsSync(distDir)) {
   })
 }
 
-const BIND_HOST = '127.0.0.1'
-const server = process.env.TESTING ? null : app.listen(PORT, BIND_HOST, () => {
-  console.log(`Hub dashboard API running at http://${BIND_HOST}:${PORT}`)
+const server = process.env.TESTING ? null : app.listen(PORT, DISPATCH_BIND, () => {
+  console.log(`Hub dashboard API running at http://${DISPATCH_BIND}:${PORT}`)
 })
 
 // ── Persistent PTY sessions ──────────────────────────────
@@ -2923,6 +2997,12 @@ wss = new WebSocketServer({
   server,
   path: '/ws/terminal',
   verifyClient({ req }, done) {
+    if (DISPATCH_API_KEY) {
+      const key = extractApiKeyFromWsRequest(req)
+      if (key !== DISPATCH_API_KEY) {
+        return done(false, 401, 'Unauthorized')
+      }
+    }
     const origin = req.headers.origin || ''
     // Allow connections with no origin (non-browser clients, curl, server hooks)
     if (!origin || ALLOWED_ORIGINS.has(origin)) {

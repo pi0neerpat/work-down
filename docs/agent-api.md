@@ -1,8 +1,27 @@
 # Dispatch Server API — Agent Reference
 
-Base URL: `http://127.0.0.1:3747`
+Base URL: `http://127.0.0.1:3747` (or your hub host when `DISPATCH_BIND` exposes the LAN).
 
 All request and response bodies are JSON. All write endpoints require `Content-Type: application/json`.
+
+---
+
+## Authentication and server options
+
+When **`DISPATCH_API_KEY`** is set on the hub process, every **`/api/*`** request must include that key:
+
+- Header `Authorization: Bearer <key>`, or
+- Header `X-API-Key: <key>`
+
+The **`/ws/terminal`** WebSocket accepts the same key via header (`X-API-Key` / `Authorization`, e.g. Vite dev proxy) or query parameter **`apiKey=<key>`** (e.g. browser connecting straight to the hub).
+
+| Env | Purpose |
+|-----|---------|
+| `DISPATCH_API_KEY` | If set, required for all HTTP `/api/*` and for `/ws/terminal` as above. |
+| `DISPATCH_BIND` | Listen address (default `127.0.0.1`). Use `0.0.0.0` only with a firewall + API key on untrusted networks. |
+| `PORT` | HTTP port (default `3747`). |
+
+For **`yarn dev`**, put `DISPATCH_API_KEY` in `dashboard/.env.local` so the Vite proxy forwards it. For a **production build** served by the hub with auth enabled, set **`VITE_DISPATCH_API_KEY`** at build time to the same value (see `dashboard/env.example`).
 
 ---
 
@@ -131,6 +150,32 @@ Returns available skills.
 {
   "local": [{ "id": "local:done", "name": "done", "source": "local" }],
   "global": [{ "id": "global:dispatch", "name": "dispatch", "source": "global" }]
+}
+```
+
+### Catalog (repos + agents + models)
+```
+GET /api/catalog
+```
+Single response for orchestrators: connected **repos** (name, relative `path`, task/activity/bugs files), supported **agent** kinds with labels, per-agent **models** (same logic as `/api/agents/models`), and **`modelSources`** (`api`, `fallback`, `codex-cache`, etc.).
+
+```json
+{
+  "hubRoot": ".",
+  "repos": [
+    { "name": "my-app", "path": "../my-app", "taskFile": "todo.md", "activityFile": "activity-log.md", "bugsFile": "bugs.md" }
+  ],
+  "agents": [
+    { "id": "claude", "label": "Claude" },
+    { "id": "codex", "label": "Codex" },
+    { "id": "cursor", "label": "Cursor" }
+  ],
+  "models": {
+    "claude": [{ "value": "claude-opus-4-6", "label": "..." }],
+    "codex": [],
+    "cursor": []
+  },
+  "modelSources": { "claude": "api", "codex": "codex-cache", "cursor": "fallback" }
 }
 ```
 

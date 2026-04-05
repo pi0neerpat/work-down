@@ -200,6 +200,19 @@ describe('Dashboard GET endpoints', () => {
     assert.equal(json.repos[0].name, 'testrepo');
   });
 
+  it('GET /api/catalog returns repos, agents, models, modelSources', async () => {
+    const { status, json } = await api('GET', '/api/catalog');
+    assert.equal(status, 200);
+    assert.ok(Array.isArray(json.repos));
+    assert.equal(json.repos[0].name, 'testrepo');
+    assert.ok(json.repos[0].taskFile);
+    assert.ok(Array.isArray(json.agents));
+    assert.ok(json.agents.some((a) => a.id === 'claude'));
+    assert.ok(json.models && typeof json.models === 'object');
+    assert.ok(json.models.claude && Array.isArray(json.models.claude));
+    assert.ok(json.modelSources && json.modelSources.claude);
+  });
+
   it('GET /api/overview returns stage, repos, totals', async () => {
     const { status, json } = await api('GET', '/api/overview');
     assert.equal(status, 200);

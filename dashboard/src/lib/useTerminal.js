@@ -49,6 +49,8 @@ export function useTerminal({ onConnected, onIncomingData, onJobsChanged, repo, 
     if (repo) params.set('repo', repo)
     if (sessionId) params.set('session', sessionId)
     if (jobFilePath) params.set('jobFile', jobFilePath)
+    const viteKey = import.meta.env.VITE_DISPATCH_API_KEY
+    if (viteKey) params.set('apiKey', viteKey)
     const qs = params.toString() ? `?${params.toString()}` : ''
     const ws = new WebSocket(`${protocol}//${location.host}/ws/terminal${qs}`)
     wsRef.current = ws

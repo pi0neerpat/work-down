@@ -9,6 +9,7 @@
 - **Add a Stop job button for dangling / orphaned jobs**
 - **Add forward-and-backward linking to job details for related jobs. Eg. dispatching a follow-up job will create a new job. and on that new job i want to be able to easily navigate to the previous job. Maybe at the top of the job page we have a simple navigation <-- [Previous_job_name] and if there is a chain of jobs then something like this: [<-- [revious_job_name]. [next_job_name -->]**
 - **Please ensure this is persisted across page loads and navigation --- Previous job context: notes/jobs/2026-04-07-reorder-active-jobs-to-the-top-of-the-jobs-list-ad.md**
+- **Use `gh pr view` to pull the latest claude code review. Then identify which issues remain and address each high and medium finding with a fix.**
 
 ---
 

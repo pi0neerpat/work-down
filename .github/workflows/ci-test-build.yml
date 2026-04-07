@@ -13,17 +13,14 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
-          corepack: true
+          node-version: 24
 
-      # Runner image ships Yarn 1 at /usr/local/bin/yarn; it runs before Corepack
-      # can take over (e.g. setup-node "cache: yarn" uses `yarn cache dir`).
-      - name: Use Corepack Yarn only
-        run: |
-          sudo rm -f /usr/local/bin/yarn /usr/local/bin/yarnpkg
-          corepack prepare yarn@4.9.1 --activate
-          yarn --version
-
+      - name: Enable Corepack
+        run: corepack enable
+  
+      - name: Setup Yarn
+        run: corepack prepare yarn@4.6.0 --activate
+        
       - name: Install dependencies
         working-directory: dashboard
         run: yarn install --immutable

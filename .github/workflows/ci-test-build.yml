@@ -16,9 +16,10 @@ jobs:
           node-version: "20"
           cache: yarn
           cache-dependency-path: dashboard/yarn.lock
+          corepack: true
 
-      - name: Enable Corepack
-        run: corepack enable
+      - name: Activate Yarn from packageManager
+        run: corepack prepare yarn@4.9.1 --activate
 
       - name: Install dependencies
         working-directory: dashboard

@@ -291,7 +291,7 @@ export default function AllTasksView({
               onClick={() => setRepoDropdownOpen(p => !p)}
               className="flex items-center gap-1.5 px-3 py-2.5 text-[12px] font-medium capitalize"
               style={newTaskRepo
-                ? { color: getRepoColor(overview, newTaskRepo) }
+                ? { color: getRepoColor(overview, newTaskRepo, 'var(--muted-foreground)') }
                 : { color: 'var(--muted-foreground)' }}
             >
               {newTaskRepo || 'Repo'}

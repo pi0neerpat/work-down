@@ -659,6 +659,13 @@ app.param('name', (req, res, next, value) => {
   }
   next()
 })
+app.param('repoName', (req, res, next, value) => {
+  // Repo names: same rules as :name — alphanumeric + hyphens/underscores/dots
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,100}$/.test(value) || value.includes('..')) {
+    return res.status(400).json({ error: `Invalid repoName parameter: ${value.slice(0, 80)}` })
+  }
+  next()
+})
 app.param('slug', (req, res, next, value) => {
   // Plan slugs: alphanumeric + hyphens/underscores, no path traversal
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,200}$/.test(value)) {

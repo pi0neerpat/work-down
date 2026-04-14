@@ -1692,7 +1692,7 @@ app.post(['/api/jobs/init', '/api/swarm/init'], (req, res) => {
     planSlug,
     skills,
     previousJobId,
-  } = req.body
+  } = req.body || {}
   if (!repo || !taskText) return res.status(400).json({ error: 'repo and taskText required' })
   // Validate sessionId if client-supplied — it's used in file path construction (persistPromptFile)
   if (sessionId && !isValidSessionId(sessionId)) {
@@ -2681,12 +2681,25 @@ app.get('/api/schedules', (req, res) => {
 })
 
 app.post('/api/schedules', (req, res) => {
-  const { name, repo, cron, prompt, model, type, loopType, agentSpec, command, concurrency, recurring } = req.body
+  const { name, repo, cron, prompt, model, type, loopType, agentSpec, command, concurrency, recurring } = req.body || {}
   if (!name || !repo || !cron) {
     return res.status(400).json({ error: 'name, repo, and cron required' })
   }
   const cronError = validateCron(cron)
   if (cronError) return res.status(400).json({ error: cronError })
+  // Validate repo exists in config
+  if (!findRepoConfig(repo)) {
+    return res.status(404).json({ error: `repo "${repo}" not found` })
+  }
+  // Validate schedule type
+  const validTypes = ['prompt', 'job', 'loop', 'shell']
+  if (type && !validTypes.includes(type)) {
+    return res.status(400).json({ error: `type must be one of: ${validTypes.join(', ')}` })
+  }
+  // Validate agentSpec if provided
+  if (agentSpec && !isValidAgentSpec(String(agentSpec))) {
+    return res.status(400).json({ error: `Invalid agent spec: ${String(agentSpec).slice(0, 80)}` })
+  }
 
   const schedule = createScheduleParsers(DISPATCH_ROOT, {
     name, type: type || 'prompt', repo, cron,
@@ -2708,6 +2721,18 @@ app.put('/api/schedules/:id', (req, res) => {
   if (req.body.cron) {
     const cronError = validateCron(req.body.cron)
     if (cronError) return res.status(400).json({ error: cronError })
+  }
+  if (req.body.repo && !findRepoConfig(req.body.repo)) {
+    return res.status(404).json({ error: `repo "${req.body.repo}" not found` })
+  }
+  if (req.body.type) {
+    const validTypes = ['prompt', 'job', 'loop', 'shell']
+    if (!validTypes.includes(req.body.type)) {
+      return res.status(400).json({ error: `type must be one of: ${validTypes.join(', ')}` })
+    }
+  }
+  if (req.body.agentSpec && !isValidAgentSpec(String(req.body.agentSpec))) {
+    return res.status(400).json({ error: `Invalid agent spec: ${String(req.body.agentSpec).slice(0, 80)}` })
   }
   const allowedFields = ['name', 'type', 'repo', 'cron', 'prompt', 'model', 'loopType', 'agentSpec', 'command', 'concurrency', 'recurring', 'enabled']
   const sanitized = {}

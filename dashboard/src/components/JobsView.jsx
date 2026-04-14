@@ -170,14 +170,18 @@ export default function JobsView({
   const [bugFilter, setBugFilter] = useState(() => savedFilters?.bugOnly ?? false)
 
   // Sync repo filter when repos change — add any newly discovered repos
-  useMemo(() => {
+  const repoNamesKey = repoNames.join(',')
+  useEffect(() => {
     if (repoNames.length > 0) {
-      const newRepos = repoNames.filter(r => !selectedRepos.has(r))
-      if (newRepos.length > 0 && savedFilters === null) {
-        setSelectedRepos(new Set([...selectedRepos, ...newRepos]))
-      }
+      setSelectedRepos(prev => {
+        const newRepos = repoNames.filter(r => !prev.has(r))
+        if (newRepos.length > 0 && savedFilters === null) {
+          return new Set([...prev, ...newRepos])
+        }
+        return prev
+      })
     }
-  }, [repoNames.join(',')]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [repoNamesKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     saveFilters(STORAGE_KEY, { statuses: selectedStatuses, repos: selectedRepos, bugOnly: bugFilter, showReadReview })

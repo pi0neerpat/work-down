@@ -166,7 +166,7 @@ export function parseChunkWithAdapters(chunk, state = {}) {
 export function createSessionEventStore({ sessionId, repo, baseDir, ringSize = 1200 }) {
   const created = Date.now()
   const runtimeDir = path.join(baseDir, '.dispatch', 'runtime', 'events')
-  fs.mkdirSync(runtimeDir, { recursive: true })
+  try { fs.mkdirSync(runtimeDir, { recursive: true }) } catch { /* best effort — snapshot writes will also gracefully fail */ }
   const snapshotPath = path.join(runtimeDir, `${sessionId}.ndjson`)
 
   return {

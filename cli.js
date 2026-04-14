@@ -751,6 +751,7 @@ function cmdScheduleRun() {
 
       // Build dispatch prompt
       const jobRelPath = `notes/jobs/${fileName}`;
+      if (!schedule.prompt) fail('Schedule has no prompt configured — cannot dispatch a job without a prompt.');
       const dispatchPrompt = schedule.prompt
         + '\n\nUse a strictly linear approach. Do not run tasks in parallel and do not delegate to sub-agents.'
         + `\n\nWrite progress to the existing file just created: ${jobRelPath}`;
@@ -784,6 +785,7 @@ function cmdScheduleRun() {
       fs.appendFileSync(logPath, output, 'utf8');
     } else if (schedule.type === 'shell') {
       // Run arbitrary shell command
+      if (!schedule.command) fail('Schedule has no command configured — cannot run a shell schedule without a command.');
       const output = execFileSync('bash', ['-c', schedule.command], {
         cwd: repoCwd, encoding: 'utf8', timeout: 60 * 60 * 1000,
         stdio: ['pipe', 'pipe', 'pipe'],
@@ -791,6 +793,7 @@ function cmdScheduleRun() {
       fs.appendFileSync(logPath, output, 'utf8');
     } else {
       // Prompt type — claude --print (no job tracking)
+      if (!schedule.prompt) fail('Schedule has no prompt configured — cannot run a prompt schedule without a prompt.');
       const claudeArgs = ['--print', '--dangerously-skip-permissions', '-p', schedule.prompt];
       if (schedule.model) { claudeArgs.push('--model', schedule.model); }
       const output = execFileSync('claude', claudeArgs, {

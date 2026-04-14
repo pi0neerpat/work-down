@@ -26,7 +26,7 @@
 // ─────────────────────────────────────────────────────────
 
 import { createRequire } from 'module'
-import { execFileSync, execSync, spawn, spawnSync } from 'child_process'
+import { execFileSync, spawn, spawnSync } from 'child_process'
 import express from 'express'
 import cors from 'cors'
 import path from 'path'
@@ -137,7 +137,7 @@ function getLatestRunByJobId(jobId) {
   if (!jobId) return null
   const matches = jobRuns.filter(run => run.jobId === jobId)
   if (matches.length === 0) return null
-  matches.sort((a, b) => Date.parse(b.updatedAt || b.createdAt || 0) - Date.parse(a.updatedAt || a.createdAt || 0))
+  matches.sort((a, b) => Date.parse(b.updatedAt || b.createdAt || '0') - Date.parse(a.updatedAt || a.createdAt || '0'))
   return matches[0]
 }
 
@@ -145,7 +145,7 @@ function getLatestRunBySessionId(sessionId) {
   if (!sessionId) return null
   const matches = jobRuns.filter(run => run.sessionId === sessionId)
   if (matches.length === 0) return null
-  matches.sort((a, b) => Date.parse(b.updatedAt || b.createdAt || 0) - Date.parse(a.updatedAt || a.createdAt || 0))
+  matches.sort((a, b) => Date.parse(b.updatedAt || b.createdAt || '0') - Date.parse(a.updatedAt || a.createdAt || '0'))
   return matches[0]
 }
 
@@ -822,28 +822,42 @@ app.get('/api/skills', (req, res) => {
 app.get('/api/overview', (req, res) => {
   const config = getConfig()
   const repos = config.repos.map(repo => {
-    const rp = repo.resolvedPath
-    const tasks = parseTaskFile(path.join(rp, repo.taskFile))
-    const activity = parseActivityLog(path.join(rp, repo.activityFile))
-    const git = getCachedGitInfo(rp)
-    let checkpoints = []
-    try { checkpoints = listCheckpoints(rp) } catch { /* ignore */ }
+    try {
+      const rp = repo.resolvedPath
+      const tasks = parseTaskFile(path.join(rp, repo.taskFile))
+      const activity = parseActivityLog(path.join(rp, repo.activityFile))
+      const git = getCachedGitInfo(rp)
+      let checkpoints = []
+      try { checkpoints = listCheckpoints(rp) } catch { /* ignore */ }
 
-    // Parse bugs.md if configured (optional — gracefully skip if missing)
-    let bugs = { openCount: 0, doneCount: 0, sections: [], allTasks: [] }
-    if (repo.bugsFile) {
-      bugs = parseTaskFile(path.join(rp, repo.bugsFile))
-    }
+      // Parse bugs.md if configured (optional — gracefully skip if missing)
+      let bugs = { openCount: 0, doneCount: 0, sections: [], allTasks: [] }
+      if (repo.bugsFile) {
+        bugs = parseTaskFile(path.join(rp, repo.bugsFile))
+      }
 
-    return {
-      name: repo.name,
-      ...(repo.color ? { color: repo.color } : {}),
-      git,
-      tasks: { openCount: tasks.openCount, doneCount: tasks.doneCount, sections: tasks.sections, allTasks: tasks.allTasks },
-      bugs: { openCount: bugs.openCount, doneCount: bugs.doneCount, sections: bugs.sections, allTasks: bugs.allTasks },
-      lastActivity: activity.entries[0] || null,
-      activity: { stage: activity.stage, entries: activity.entries.slice(0, 3) },
-      checkpoints,
+      return {
+        name: repo.name,
+        ...(repo.color ? { color: repo.color } : {}),
+        git,
+        tasks: { openCount: tasks.openCount, doneCount: tasks.doneCount, sections: tasks.sections, allTasks: tasks.allTasks },
+        bugs: { openCount: bugs.openCount, doneCount: bugs.doneCount, sections: bugs.sections, allTasks: bugs.allTasks },
+        lastActivity: activity.entries[0] || null,
+        activity: { stage: activity.stage, entries: activity.entries.slice(0, 3) },
+        checkpoints,
+      }
+    } catch (err) {
+      console.warn(`overview: failed to load repo "${repo.name}":`, err.message)
+      return {
+        name: repo.name,
+        ...(repo.color ? { color: repo.color } : {}),
+        git: null,
+        tasks: { openCount: 0, doneCount: 0, sections: [], allTasks: [] },
+        bugs: { openCount: 0, doneCount: 0, sections: [], allTasks: [] },
+        lastActivity: null,
+        activity: { stage: '', entries: [] },
+        checkpoints: [],
+      }
     }
   })
 
@@ -947,7 +961,7 @@ app.get(['/api/jobs', '/api/swarm'], (req, res) => {
   for (const run of jobRuns) {
     if (!run.jobId) continue
     const prev = latestRunByJob.get(run.jobId)
-    if (!prev || Date.parse(run.updatedAt || run.createdAt || 0) > Date.parse(prev.updatedAt || prev.createdAt || 0)) {
+    if (!prev || Date.parse(run.updatedAt || run.createdAt || '0') > Date.parse(prev.updatedAt || prev.createdAt || '0')) {
       latestRunByJob.set(run.jobId, run)
     }
   }
@@ -1523,14 +1537,13 @@ function readCodexModelsCache() {
 function readClaudeOAuthToken() {
   try {
     // Claude Code stores its OAuth credentials in the macOS keychain.
-    // security outputs the password line to stderr, so merge with 2>&1.
-    const raw = execSync(
-      'security find-generic-password -s "Claude Code-credentials" -g 2>&1',
-      { encoding: 'utf8' }
+    // -w outputs just the raw password value to stdout (unlike -g which uses stderr).
+    const raw = execFileSync(
+      'security', ['find-generic-password', '-s', 'Claude Code-credentials', '-w'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
     )
-    const match = raw.match(/password: "(.+)"/)
-    if (!match) return null
-    const creds = JSON.parse(match[1])
+    if (!raw || !raw.trim()) return null
+    const creds = JSON.parse(raw.trim())
     return creds?.claudeAiOauth?.accessToken || null
   } catch {
     return null

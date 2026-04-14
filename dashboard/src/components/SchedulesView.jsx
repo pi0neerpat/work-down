@@ -256,6 +256,7 @@ export default function SchedulesView({ overview }) {
   const [saving, setSaving] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(null)
   const [runningId, setRunningId] = useState(null)
+  const [mutationError, setMutationError] = useState(null)
 
   const fetchSchedules = useCallback(async () => {
     try {
@@ -300,6 +301,7 @@ export default function SchedulesView({ overview }) {
 
   async function handleCreate(data) {
     setSaving(true)
+    setMutationError(null)
     try {
       const res = await fetch('/api/schedules', {
         method: 'POST',
@@ -309,13 +311,19 @@ export default function SchedulesView({ overview }) {
       if (res.ok) {
         setShowForm(false)
         await fetchSchedules()
+      } else {
+        const body = await res.json().catch(() => ({}))
+        setMutationError(body.error || `Create failed (${res.status})`)
       }
-    } catch {}
+    } catch (err) {
+      setMutationError(err.message || 'Create failed')
+    }
     setSaving(false)
   }
 
   async function handleUpdate(id, data) {
     setSaving(true)
+    setMutationError(null)
     try {
       const res = await fetch(`/api/schedules/${id}`, {
         method: 'PUT',
@@ -325,8 +333,13 @@ export default function SchedulesView({ overview }) {
       if (res.ok) {
         setEditingId(null)
         await fetchSchedules()
+      } else {
+        const body = await res.json().catch(() => ({}))
+        setMutationError(body.error || `Update failed (${res.status})`)
       }
-    } catch {}
+    } catch (err) {
+      setMutationError(err.message || 'Update failed')
+    }
     setSaving(false)
   }
 
@@ -336,11 +349,14 @@ export default function SchedulesView({ overview }) {
       setTimeout(() => setConfirmDelete(prev => prev === id ? null : prev), 3000)
       return
     }
+    setMutationError(null)
     try {
       await fetch(`/api/schedules/${id}`, { method: 'DELETE' })
       setConfirmDelete(null)
       await fetchSchedules()
-    } catch {}
+    } catch (err) {
+      setMutationError(err.message || 'Delete failed')
+    }
   }
 
   async function handleToggle(id) {
@@ -370,6 +386,14 @@ export default function SchedulesView({ overview }) {
 
   return (
     <div>
+      {/* Mutation error banner */}
+      {mutationError && (
+        <div className="mb-4 px-3 py-2 rounded-lg border border-red-500/20 bg-red-500/5 flex items-center justify-between gap-2">
+          <span className="text-[12px] text-red-300">{mutationError}</span>
+          <button onClick={() => setMutationError(null)} className="text-red-400 hover:text-red-300 text-xs shrink-0">dismiss</button>
+        </div>
+      )}
+
       {/* Failure banner */}
       {recentFailures.length > 0 && (
         <div className="mb-4 px-3 py-2 rounded-lg border border-red-500/20 bg-red-500/5 flex items-center gap-2">

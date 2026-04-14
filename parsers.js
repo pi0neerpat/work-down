@@ -1622,11 +1622,20 @@ function cronMatchesDate(cronExpr, date) {
   // Normalize: 7 → 0 (both mean Sunday)
   const dow = new Set([...dowField].map(d => d === 7 ? 0 : d));
 
+  // Standard Vixie cron: when both dom and dow are restricted (not wildcard),
+  // a match occurs if EITHER condition is true (OR logic).
+  const domIsWild = parts[2] === '*';
+  const dowIsWild = parts[4] === '*';
+  const domMatch = dom.has(date.getDate());
+  const dowMatch = dow.has(date.getDay());
+  const dayMatch = (domIsWild && dowIsWild)
+    ? true
+    : (domIsWild ? dowMatch : (dowIsWild ? domMatch : (domMatch || dowMatch)));
+
   return minute.has(date.getMinutes())
     && hour.has(date.getHours())
-    && dom.has(date.getDate())
-    && month.has(date.getMonth() + 1)
-    && dow.has(date.getDay());
+    && dayMatch
+    && month.has(date.getMonth() + 1);
 }
 
 /**

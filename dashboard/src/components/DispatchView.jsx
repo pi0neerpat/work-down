@@ -279,15 +279,14 @@ export default function DispatchView({ overview, onDispatch, onLoopDispatch, ini
       })
       setPrompt('')
       onDispatchComplete?.()
-    } catch (err) {
-      console.error('Dispatch failed:', err)
-      setBtnPhase('idle')
-      setDispatchError(err.message)
-      return
-    } finally {
       setDispatching(false)
       setTimeout(() => setBtnPhase('returning'), 1800)
       setTimeout(() => setBtnPhase('idle'), 2400)
+    } catch (err) {
+      console.error('Dispatch failed:', err)
+      setDispatching(false)
+      setBtnPhase('idle')
+      setDispatchError(err.message)
     }
   }
 

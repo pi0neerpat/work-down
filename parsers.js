@@ -1770,7 +1770,7 @@ function loadSchedules(dispatchRoot) {
 function saveSchedules(dispatchRoot, schedules) {
   // Strip computed nextRun before saving (it's derived from cron + lastRun)
   const toSave = schedules.map(({ nextRun, ...rest }) => rest);
-  fs.writeFileSync(schedulesFilePath(dispatchRoot), JSON.stringify(toSave, null, 2), 'utf8');
+  fs.writeFileSync(schedulesFilePath(dispatchRoot), JSON.stringify(toSave, null, 2) + '\n', 'utf8');
 }
 
 function findSchedule(dispatchRoot, id) {
@@ -1912,7 +1912,7 @@ function appendScheduleEvent(dispatchRoot, event) {
   events.push(event);
   // Trim to rolling window
   if (events.length > MAX_EVENTS) events = events.slice(events.length - MAX_EVENTS);
-  fs.writeFileSync(fp, JSON.stringify(events, null, 2), 'utf8');
+  fs.writeFileSync(fp, JSON.stringify(events, null, 2) + '\n', 'utf8');
   return event;
 }
 
@@ -1926,7 +1926,7 @@ function clearScheduleEvents(dispatchRoot, scheduleId) {
   let events = [];
   try { events = JSON.parse(fs.readFileSync(fp, 'utf8')); } catch {}
   events = events.filter(e => e.scheduleId !== scheduleId);
-  fs.writeFileSync(fp, JSON.stringify(events, null, 2), 'utf8');
+  fs.writeFileSync(fp, JSON.stringify(events, null, 2) + '\n', 'utf8');
 }
 
 // ── Schedule lockfiles ───────────────────────────────────────
@@ -1956,7 +1956,7 @@ function acquireScheduleLock(dispatchRoot, scheduleId, jobId) {
   }
 
   const lock = { pid: process.pid, startedAt: new Date().toISOString(), scheduleId, jobId };
-  fs.writeFileSync(lockFile, JSON.stringify(lock, null, 2), 'utf8');
+  fs.writeFileSync(lockFile, JSON.stringify(lock, null, 2) + '\n', 'utf8');
   return lock;
 }
 

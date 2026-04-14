@@ -1687,6 +1687,14 @@ app.post(['/api/jobs/init', '/api/swarm/init'], (req, res) => {
     previousJobId,
   } = req.body
   if (!repo || !taskText) return res.status(400).json({ error: 'repo and taskText required' })
+  // Validate sessionId if client-supplied — it's used in file path construction (persistPromptFile)
+  if (sessionId && !isValidSessionId(sessionId)) {
+    return res.status(400).json({ error: 'Invalid sessionId format' })
+  }
+  // Validate planSlug if provided — used in path construction for plan linkage
+  if (planSlug && !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,200}$/.test(planSlug)) {
+    return res.status(400).json({ error: `Invalid plan slug: ${String(planSlug).slice(0, 80)}` })
+  }
   // Validate baseBranch if provided — reject shell metacharacters and path traversal
   const validBranchRe = /^[a-zA-Z0-9._\-/]+$/
   if (baseBranch && !validBranchRe.test(baseBranch)) {

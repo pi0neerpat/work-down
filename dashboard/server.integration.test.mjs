@@ -830,9 +830,10 @@ describe('Schedules CRUD', () => {
       prompt: 'Run weekly check',
     });
     assert.equal(status, 200);
-    assert.ok(json.id);
-    assert.equal(json.name, 'Test Schedule');
-    assert.ok(json.enabled);
+    const sched = json.schedule;
+    assert.ok(sched.id);
+    assert.equal(sched.name, 'Test Schedule');
+    assert.ok(sched.enabled);
   });
 
   it('POST /api/schedules missing fields returns 400', async () => {
@@ -851,7 +852,7 @@ describe('Schedules CRUD', () => {
       prompt: 'Initial prompt',
     });
     assert.equal(createResp.status, 200);
-    const scheduleId = createResp.json.id;
+    const scheduleId = createResp.json.schedule.id;
 
     const { status, json } = await api('PUT', `/api/schedules/${scheduleId}`, {
       name: 'Updated Name',
@@ -876,8 +877,8 @@ describe('Schedules CRUD', () => {
       prompt: 'Check something',
     });
     assert.equal(createResp.status, 200);
-    const scheduleId = createResp.json.id;
-    const originalEnabled = createResp.json.enabled;
+    const scheduleId = createResp.json.schedule.id;
+    const originalEnabled = createResp.json.schedule.enabled;
 
     const { status, json } = await api('POST', `/api/schedules/${scheduleId}/toggle`);
     assert.equal(status, 200);
@@ -892,7 +893,7 @@ describe('Schedules CRUD', () => {
       prompt: 'Some prompt',
     });
     assert.equal(createResp.status, 200);
-    const scheduleId = createResp.json.id;
+    const scheduleId = createResp.json.schedule.id;
 
     const { status, json } = await api('DELETE', `/api/schedules/${scheduleId}`);
     assert.equal(status, 200);

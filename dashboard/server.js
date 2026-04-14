@@ -53,6 +53,21 @@ const {
   createCheckpoint, revertCheckpoint, dismissCheckpoint, listCheckpoints,
   writePlanDispatch,
   writePlanStatus,
+  // Schedule functions from parsers.js
+  loadSchedules: loadSchedulesParsers,
+  createSchedule: createScheduleParsers,
+  updateSchedule: updateScheduleParsers,
+  deleteSchedule: deleteScheduleParsers,
+  toggleSchedule: toggleScheduleParsers,
+  findSchedule: findScheduleParsers,
+  getAdjacentSchedules,
+  describeCron,
+  validateCron,
+  loadScheduleEvents,
+  appendScheduleEvent,
+  clearScheduleEvents,
+  getActiveLocks,
+  syncCrontab,
 } = require('../parsers')
 
 const DISPATCH_ROOT = (process.env.DISPATCH_ROOT || process.env.HUB_DIR)
@@ -679,6 +694,17 @@ app.use((req, res, next) => {
   if (!apiKeyMatches(key)) {
     return res.status(401).json({ error: 'Unauthorized' })
   }
+  next()
+})
+
+// API responses are highly dynamic (jobs/sessions/progress), so prevent
+// browser/proxy caches from serving stale snapshots between polling ticks.
+app.use((req, res, next) => {
+  if (!req.path.startsWith('/api/')) return next()
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+  res.set('Pragma', 'no-cache')
+  res.set('Expires', '0')
+  res.set('Surrogate-Control', 'no-store')
   next()
 })
 
@@ -2581,85 +2607,130 @@ app.delete('/api/repos/:name/checkpoint/:id', (req, res) => {
   }
 })
 
-// ── Schedules CRUD ──────────────────────────────────────
+// ── Schedules CRUD (backed by parsers.js) ───────────────
 
-const SCHEDULES_FILE = path.join(DISPATCH_ROOT, 'schedules.json')
-
-function loadSchedules() {
-  try {
-    if (fs.existsSync(SCHEDULES_FILE)) {
-      return JSON.parse(fs.readFileSync(SCHEDULES_FILE, 'utf8'))
-    }
-  } catch {}
-  return []
-}
-
-function saveSchedules(schedules) {
-  fs.writeFileSync(SCHEDULES_FILE, JSON.stringify(schedules, null, 2), 'utf8')
-}
+// Auto-sync crontab on server startup
+try { syncCrontab(DISPATCH_ROOT) } catch (err) { console.warn('Schedule cron sync on startup failed:', err.message) }
 
 app.get('/api/schedules', (req, res) => {
-  const schedules = loadSchedules()
-  res.json({ schedules })
+  const schedules = loadSchedulesParsers(DISPATCH_ROOT)
+  const activeLocks = getActiveLocks(DISPATCH_ROOT)
+  res.json({
+    schedules: schedules.map(s => ({
+      ...s,
+      description: describeCron(s.cron),
+      running: activeLocks.some(l => l.scheduleId === s.id),
+    })),
+    activeCount: activeLocks.length,
+    maxConcurrent: 3,
+  })
 })
 
 app.post('/api/schedules', (req, res) => {
-  const { name, repo, cron, prompt, model } = req.body
-  if (!name || !repo || !cron || !prompt) {
-    return res.status(400).json({ error: 'name, repo, cron, and prompt required' })
+  const { name, repo, cron, prompt, model, type, loopType, agentSpec, command, concurrency, recurring } = req.body
+  if (!name || !repo || !cron) {
+    return res.status(400).json({ error: 'name, repo, and cron required' })
   }
+  const cronError = validateCron(cron)
+  if (cronError) return res.status(400).json({ error: cronError })
 
-  const schedules = loadSchedules()
-  const schedule = {
-    id: 'sched-' + Date.now(),
-    name,
-    repo,
-    cron,
-    prompt,
-    model: model || 'claude-opus-4-6',
-    enabled: true,
-    created: new Date().toISOString(),
-    lastRun: null,
-    nextRun: null,
-  }
-  schedules.push(schedule)
-  saveSchedules(schedules)
-  res.json(schedule)
+  const schedule = createScheduleParsers(DISPATCH_ROOT, {
+    name, type: type || 'prompt', repo, cron,
+    prompt: prompt || null, model: model || 'claude-opus-4-6',
+    loopType: loopType || null, agentSpec: agentSpec || null,
+    command: command || null, concurrency: concurrency || 'skip',
+    recurring: !!recurring,
+  })
+
+  try { syncCrontab(DISPATCH_ROOT) } catch {}
+  const adjacent = getAdjacentSchedules(DISPATCH_ROOT, schedule.id)
+  res.json({ schedule: { ...schedule, description: describeCron(schedule.cron) }, adjacentSchedules: adjacent })
 })
 
 app.put('/api/schedules/:id', (req, res) => {
-  const schedules = loadSchedules()
-  const idx = schedules.findIndex(s => s.id === req.params.id)
-  if (idx === -1) return res.status(404).json({ error: 'schedule not found' })
-
-  const { name, repo, cron, prompt, model } = req.body
-  if (name) schedules[idx].name = name
-  if (repo) schedules[idx].repo = repo
-  if (cron) schedules[idx].cron = cron
-  if (prompt) schedules[idx].prompt = prompt
-  if (model) schedules[idx].model = model
-  saveSchedules(schedules)
-  res.json(schedules[idx])
+  if (!findScheduleParsers(DISPATCH_ROOT, req.params.id)) {
+    return res.status(404).json({ error: 'schedule not found' })
+  }
+  if (req.body.cron) {
+    const cronError = validateCron(req.body.cron)
+    if (cronError) return res.status(400).json({ error: cronError })
+  }
+  const updated = updateScheduleParsers(DISPATCH_ROOT, req.params.id, req.body)
+  if (!updated) return res.status(404).json({ error: 'schedule not found' })
+  try { syncCrontab(DISPATCH_ROOT) } catch {}
+  res.json({ ...updated, description: describeCron(updated.cron) })
 })
 
 app.delete('/api/schedules/:id', (req, res) => {
-  let schedules = loadSchedules()
-  const idx = schedules.findIndex(s => s.id === req.params.id)
-  if (idx === -1) return res.status(404).json({ error: 'schedule not found' })
-
-  schedules.splice(idx, 1)
-  saveSchedules(schedules)
+  if (!deleteScheduleParsers(DISPATCH_ROOT, req.params.id)) {
+    return res.status(404).json({ error: 'schedule not found' })
+  }
+  try { syncCrontab(DISPATCH_ROOT) } catch {}
   res.json({ ok: true })
 })
 
 app.post('/api/schedules/:id/toggle', (req, res) => {
-  const schedules = loadSchedules()
-  const idx = schedules.findIndex(s => s.id === req.params.id)
-  if (idx === -1) return res.status(404).json({ error: 'schedule not found' })
+  const toggled = toggleScheduleParsers(DISPATCH_ROOT, req.params.id)
+  if (!toggled) return res.status(404).json({ error: 'schedule not found' })
+  try { syncCrontab(DISPATCH_ROOT) } catch {}
+  res.json({ ...toggled, description: describeCron(toggled.cron) })
+})
 
-  schedules[idx].enabled = !schedules[idx].enabled
-  saveSchedules(schedules)
-  res.json(schedules[idx])
+app.post('/api/schedules/:id/run', (req, res) => {
+  const schedule = findScheduleParsers(DISPATCH_ROOT, req.params.id)
+  if (!schedule) return res.status(404).json({ error: 'schedule not found' })
+  // Fire the schedule run in the background via cli.js
+  const nodeCmd = process.execPath
+  const cliPath = path.join(DISPATCH_ROOT, 'cli.js')
+  try {
+    const { spawn } = require('child_process')
+    const child = spawn(nodeCmd, [cliPath, 'schedule', 'run', req.params.id], {
+      cwd: DISPATCH_ROOT,
+      detached: true,
+      stdio: 'ignore',
+    })
+    child.unref()
+    res.json({ ok: true, message: `Schedule "${schedule.name}" triggered` })
+  } catch (err) {
+    res.status(500).json({ error: `Failed to trigger schedule: ${err.message}` })
+  }
+})
+
+// ── Schedule events & logs ──────────────────────────────
+
+app.get('/api/schedule-events', (req, res) => {
+  const opts = {}
+  if (req.query.scheduleId) opts.scheduleId = String(req.query.scheduleId)
+  if (req.query.type) opts.type = String(req.query.type)
+  if (req.query.limit) opts.limit = parseInt(req.query.limit, 10)
+  res.json({ events: loadScheduleEvents(DISPATCH_ROOT, opts) })
+})
+
+app.delete('/api/schedule-events', (req, res) => {
+  clearScheduleEvents(DISPATCH_ROOT, req.query.scheduleId || null)
+  res.json({ ok: true })
+})
+
+app.get('/api/schedule-logs/:id', (req, res) => {
+  const logPath = path.join(DISPATCH_ROOT, '.dispatch', 'runtime', 'schedule-logs', `${req.params.id}.log`)
+  if (!fs.existsSync(logPath)) return res.json({ log: '', exists: false })
+  const tail = parseInt(req.query.tail, 10) || 200
+  try {
+    const content = fs.readFileSync(logPath, 'utf8')
+    const lines = content.split('\n')
+    const sliced = lines.slice(Math.max(0, lines.length - tail)).join('\n')
+    res.json({ log: sliced, exists: true, totalLines: lines.length })
+  } catch { res.json({ log: '', exists: false }) }
+})
+
+app.get('/api/schedule-active', (req, res) => {
+  const locks = getActiveLocks(DISPATCH_ROOT)
+  const schedules = loadSchedulesParsers(DISPATCH_ROOT)
+  const active = locks.map(lock => {
+    const sched = schedules.find(s => s.id === lock.scheduleId)
+    return { ...lock, name: sched?.name || 'unknown', repo: sched?.repo || 'unknown' }
+  })
+  res.json({ active, count: active.length, maxConcurrent: 3 })
 })
 
 // SPA fallback for client-side routing

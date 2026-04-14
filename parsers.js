@@ -117,6 +117,24 @@ function normalizeStatus(raw) {
   return lower;
 }
 
+const ANSI_CSI_RE = /\u001b\[[0-?]*[ -/]*[@-~]/g;
+const ANSI_OSC_RE = /\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g;
+const CONTROL_RE = /[\u0000-\u001f\u007f]/g;
+
+function sanitizeLoopLogLine(value) {
+  return String(value || '')
+    .replace(ANSI_OSC_RE, '')
+    .replace(ANSI_CSI_RE, '')
+    .replace(CONTROL_RE, '')
+    .trim();
+}
+
+const LOOP_DONE_RE = /(?:^|[\s>])All phases complete\. Loop done\.\s*$/;
+const LOOP_ISSUES_DONE_RE = /(?:^|[\s>])All issues resolved\. Loop done\.\s*$/;
+const LOOP_VERIFIED_PASS_RE = /(?:^|[\s>])VERIFIED:\s*PASS\s*$/;
+const LOOP_VERDICT_PASS_RE = /(?:^|[\s>])VERDICT:\s*PASS\s*$/;
+const LOOP_VERDICT_FAIL_RE = /(?:^|[\s>])VERDICT:\s*FAIL\s*$/;
+
 function parseJobFile(filePath) {
   const id = path.basename(filePath, '.md');
   let taskName = '', started = '', status = 'unknown', validation = 'none', agentId = null, skills = [];
@@ -305,20 +323,38 @@ function parseLoopRun(runDir) {
         continue;
       }
       // Parse body
-      const iterMatch = line.match(/Iteration\s+(\d+)/i);
-      if (iterMatch) iteration = parseInt(iterMatch[1], 10);
-      if (line.includes('ALL PHASES COMPLETE')) { lastVerdict = 'ALL PHASES COMPLETE'; complete = true; }
-      else if (line.includes('ALL ISSUES RESOLVED')) { lastVerdict = 'ALL ISSUES RESOLVED'; complete = true; }
-      else if (line.includes('VERIFIED: PASS')) lastVerdict = 'VERIFIED: PASS';
-      else if (line.includes('VERDICT: PASS')) lastVerdict = 'VERDICT: PASS';
-      else if (line.includes('VERDICT: FAIL')) lastVerdict = 'VERDICT: FAIL';
-      const statusMatch = line.match(/^LOOP_STATUS:\s*(.+)/);
+      const normalized = sanitizeLoopLogLine(line);
+      const iterMatchSafe = normalized.match(/\bIteration\s+(\d+)\b/i);
+      if (iterMatchSafe) iteration = parseInt(iterMatchSafe[1], 10);
+      if (LOOP_DONE_RE.test(normalized)) { lastVerdict = 'ALL PHASES COMPLETE'; complete = true; }
+      else if (LOOP_ISSUES_DONE_RE.test(normalized)) { lastVerdict = 'ALL ISSUES RESOLVED'; complete = true; }
+      else if (LOOP_VERIFIED_PASS_RE.test(normalized)) lastVerdict = 'VERIFIED: PASS';
+      else if (LOOP_VERDICT_PASS_RE.test(normalized)) lastVerdict = 'VERDICT: PASS';
+      else if (LOOP_VERDICT_FAIL_RE.test(normalized)) lastVerdict = 'VERDICT: FAIL';
+      const statusMatch = normalized.match(/LOOP_STATUS:\s*([a-z_]+)/i);
       if (statusMatch) {
-        loopStatus = statusMatch[1].trim();
-        if (loopStatus === 'completed') complete = true;
+        const rawStatus = statusMatch[1].trim().toLowerCase();
+        if (rawStatus.startsWith('completed')) {
+          loopStatus = 'completed';
+          complete = true;
+        } else if (rawStatus.startsWith('failed')) {
+          loopStatus = 'failed';
+        } else {
+          loopStatus = rawStatus;
+        }
       }
     }
   } catch { /* log missing */ }
+  if (!loopStatus) {
+    try {
+      const statusPath = path.join(runDir, 'status.txt');
+      if (fs.existsSync(statusPath)) {
+        const raw = fs.readFileSync(statusPath, 'utf8').trim().toLowerCase();
+        if (raw === 'completed' || raw === 'failed') loopStatus = raw;
+      }
+    } catch { /* ignore */ }
+  }
+  if (loopStatus === 'completed') complete = true;
   return { session, loopType, agent, started, iteration, lastVerdict, complete, loopStatus, runDir };
 }
 
@@ -371,14 +407,15 @@ function parseLoopRunDetailed(runDir) {
         if (line.trim() === '---') pastHeader = true;
         continue;
       }
-      const iterMatch = line.match(/Iteration\s+(\d+)\s*[-–—]\s*(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})/i);
+      const normalized = sanitizeLoopLogLine(line);
+      const iterMatch = normalized.match(/Iteration\s+(\d+)\s*[-–—]\s*(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})/i);
       if (iterMatch) {
         currentIter = { number: parseInt(iterMatch[1], 10), timestamp: iterMatch[2], verdict: null };
         iterations.push(currentIter);
         continue;
       }
       // Also match iteration lines without timestamps
-      const iterMatchSimple = line.match(/Iteration\s+(\d+)/i);
+      const iterMatchSimple = normalized.match(/\bIteration\s+(\d+)\b/i);
       if (iterMatchSimple && !iterMatch) {
         const num = parseInt(iterMatchSimple[1], 10);
         if (!currentIter || currentIter.number !== num) {
@@ -387,10 +424,11 @@ function parseLoopRunDetailed(runDir) {
         }
       }
       if (currentIter) {
-        if (line.includes('VERDICT: PASS') || line.includes('VERIFIED: PASS')) currentIter.verdict = 'PASS';
-        else if (line.includes('VERDICT: FAIL')) currentIter.verdict = 'FAIL';
-        else if (line.includes('ALL PHASES COMPLETE')) currentIter.verdict = 'PASS';
-        else if (line.includes('ALL ISSUES RESOLVED')) currentIter.verdict = 'PASS';
+        if (LOOP_VERDICT_PASS_RE.test(normalized) || LOOP_VERIFIED_PASS_RE.test(normalized)) currentIter.verdict = 'PASS';
+        else if (LOOP_VERDICT_FAIL_RE.test(normalized)) currentIter.verdict = 'FAIL';
+        else if (LOOP_DONE_RE.test(normalized)) currentIter.verdict = 'PASS';
+        else if (LOOP_ISSUES_DONE_RE.test(normalized)) currentIter.verdict = 'PASS';
+        else if (/LOOP_STATUS:\s*completed\b/i.test(normalized)) currentIter.verdict = 'PASS';
       }
     }
   } catch (err) {
@@ -406,9 +444,11 @@ function parseLoopRunDetailed(runDir) {
       const reviewMatch = file.match(/^review_iter(\d+)/);
       const synthMatch = file.match(/^synthesis_iter(\d+)/);
       const verifyMatch = file.match(/^verification_iter(\d+)/);
+      const phaseMatch = file.match(/^phase_iter(\d+)/);
       if (reviewMatch) { type = 'review'; iteration = parseInt(reviewMatch[1], 10); }
       else if (synthMatch) { type = 'synthesis'; iteration = parseInt(synthMatch[1], 10); }
       else if (verifyMatch) { type = 'verification'; iteration = parseInt(verifyMatch[1], 10); }
+      else if (phaseMatch) { type = 'phase'; iteration = parseInt(phaseMatch[1], 10); }
 
       let content = '';
       try {
@@ -1527,6 +1567,467 @@ function writePlanDispatch(filePath, date, jobId) {
   fs.writeFileSync(filePath, newContent, 'utf8');
 }
 
+// ── Cron parsing (zero external deps) ────────────────────────
+
+/**
+ * Parse a single cron field into a Set of matching integers.
+ * Supports: specific values (5), ranges (1-5), step values (star/15), comma lists (1,3,5).
+ */
+function parseCronField(field, min, max) {
+  const result = new Set();
+  for (const part of field.split(',')) {
+    const stepMatch = part.match(/^(.+)\/(\d+)$/);
+    let range, step = 1;
+    if (stepMatch) {
+      range = stepMatch[1];
+      step = parseInt(stepMatch[2], 10);
+    } else {
+      range = part;
+    }
+
+    if (range === '*') {
+      for (let i = min; i <= max; i += step) result.add(i);
+    } else {
+      const dashMatch = range.match(/^(\d+)-(\d+)$/);
+      if (dashMatch) {
+        const start = parseInt(dashMatch[1], 10);
+        const end = parseInt(dashMatch[2], 10);
+        for (let i = start; i <= end && i <= max; i += step) {
+          if (i >= min) result.add(i);
+        }
+      } else {
+        const val = parseInt(range, 10);
+        if (!isNaN(val) && val >= min && val <= max) result.add(val);
+      }
+    }
+  }
+  return result;
+}
+
+/**
+ * Check if a cron expression matches a given Date (local time).
+ * Standard 5-field: minute hour dom month dow
+ * dow: 0=Sun, 1=Mon, ..., 6=Sat, 7=Sun (alias)
+ */
+function cronMatchesDate(cronExpr, date) {
+  const parts = cronExpr.trim().split(/\s+/);
+  if (parts.length !== 5) return false;
+
+  const minute = parseCronField(parts[0], 0, 59);
+  const hour = parseCronField(parts[1], 0, 23);
+  const dom = parseCronField(parts[2], 1, 31);
+  const month = parseCronField(parts[3], 1, 12);
+  const dowField = parseCronField(parts[4], 0, 7);
+  // Normalize: 7 → 0 (both mean Sunday)
+  const dow = new Set([...dowField].map(d => d === 7 ? 0 : d));
+
+  return minute.has(date.getMinutes())
+    && hour.has(date.getHours())
+    && dom.has(date.getDate())
+    && month.has(date.getMonth() + 1)
+    && dow.has(date.getDay());
+}
+
+/**
+ * Compute the next Date after `after` that matches the cron expression.
+ * Scans forward minute-by-minute, up to maxDays (default 366).
+ * Returns null if no match found within the window.
+ */
+function computeNextRun(cronExpr, after, maxDays) {
+  if (!after) after = new Date();
+  maxDays = maxDays || 366;
+  // Start from the next whole minute
+  const cursor = new Date(after.getTime());
+  cursor.setSeconds(0, 0);
+  cursor.setMinutes(cursor.getMinutes() + 1);
+
+  const limit = after.getTime() + maxDays * 24 * 60 * 60 * 1000;
+  while (cursor.getTime() <= limit) {
+    if (cronMatchesDate(cronExpr, cursor)) return new Date(cursor);
+    cursor.setMinutes(cursor.getMinutes() + 1);
+  }
+  return null;
+}
+
+/**
+ * Human-readable description of a cron expression.
+ * Covers common patterns; falls back to the raw expression for complex ones.
+ */
+function describeCron(cronExpr) {
+  const parts = cronExpr.trim().split(/\s+/);
+  if (parts.length !== 5) return cronExpr;
+  const [min, hr, dom, mon, dow] = parts;
+
+  function fmtTime(h, m) {
+    const hh = parseInt(h, 10);
+    const mm = parseInt(m, 10);
+    const ampm = hh >= 12 ? 'PM' : 'AM';
+    const h12 = hh === 0 ? 12 : hh > 12 ? hh - 12 : hh;
+    return mm === 0 ? `${h12} ${ampm}` : `${h12}:${String(mm).padStart(2, '0')} ${ampm}`;
+  }
+
+  const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+  // Every N minutes
+  const minStep = min.match(/^\*\/(\d+)$/);
+  if (minStep && hr === '*' && dom === '*' && mon === '*' && dow === '*') {
+    return `Every ${minStep[1]} minutes`;
+  }
+
+  // Specific time patterns
+  if (!min.includes(',') && !min.includes('-') && !min.includes('/') &&
+      !hr.includes(',') && !hr.includes('-') && !hr.includes('/') &&
+      min !== '*' && hr !== '*') {
+    const timeStr = fmtTime(hr, min);
+
+    if (dom === '*' && mon === '*' && dow === '*') {
+      return `Daily at ${timeStr}`;
+    }
+    if (dom === '*' && mon === '*' && dow === '1-5') {
+      return `Weekdays at ${timeStr}`;
+    }
+    if (dom === '*' && mon === '*' && dow === '0,6') {
+      return `Weekends at ${timeStr}`;
+    }
+    if (dom === '*' && mon === '*' && dow !== '*') {
+      const days = dow.split(',').map(d => dayNames[parseInt(d, 10)] || d).join(', ');
+      return `${days} at ${timeStr}`;
+    }
+    if (/^\d+$/.test(dom) && mon === '*' && dow === '*') {
+      return `${dom}${ordinal(parseInt(dom, 10))} of each month at ${timeStr}`;
+    }
+  }
+
+  return cronExpr;
+}
+
+function ordinal(n) {
+  if (n >= 11 && n <= 13) return 'th';
+  const last = n % 10;
+  if (last === 1) return 'st';
+  if (last === 2) return 'nd';
+  if (last === 3) return 'rd';
+  return 'th';
+}
+
+/**
+ * Validate a cron expression. Returns null if valid, or an error string.
+ */
+function validateCron(cronExpr) {
+  if (!cronExpr || typeof cronExpr !== 'string') return 'cron expression is required';
+  const parts = cronExpr.trim().split(/\s+/);
+  if (parts.length !== 5) return 'cron expression must have exactly 5 fields (minute hour dom month dow)';
+  const ranges = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 7]];
+  const names = ['minute', 'hour', 'day-of-month', 'month', 'day-of-week'];
+  for (let i = 0; i < 5; i++) {
+    const vals = parseCronField(parts[i], ranges[i][0], ranges[i][1]);
+    if (vals.size === 0) return `invalid ${names[i]} field: "${parts[i]}"`;
+  }
+  return null;
+}
+
+// ── Schedule CRUD ────────────────────────────────────────────
+
+const SCHEDULES_FILENAME = 'schedules.json';
+const SCHEDULE_EVENTS_FILENAME = 'schedule-events.json';
+const SCHEDULE_LOCKS_DIR = 'schedule-locks';
+const SCHEDULE_LOGS_DIR = 'schedule-logs';
+const MAX_EVENTS = 100;
+
+function schedulesFilePath(dispatchRoot) {
+  return path.join(dispatchRoot, SCHEDULES_FILENAME);
+}
+
+function runtimeDir(dispatchRoot) {
+  return path.join(dispatchRoot, '.dispatch', 'runtime');
+}
+
+function loadSchedules(dispatchRoot) {
+  try {
+    const fp = schedulesFilePath(dispatchRoot);
+    if (fs.existsSync(fp)) {
+      const schedules = JSON.parse(fs.readFileSync(fp, 'utf8'));
+      // Compute nextRun for each enabled schedule
+      const now = new Date();
+      return schedules.map(s => {
+        // Always compute nextRun relative to 'now' so it's never in the past.
+        // Use the later of lastRun and now to handle clock-skew edge cases.
+        let after = now;
+        if (s.lastRun) {
+          const lr = new Date(s.lastRun);
+          if (lr > now) after = lr;
+        }
+        return {
+          ...s,
+          nextRun: s.enabled ? (computeNextRun(s.cron, after) || null) : null,
+        };
+      });
+    }
+  } catch { /* file missing or invalid */ }
+  return [];
+}
+
+function saveSchedules(dispatchRoot, schedules) {
+  // Strip computed nextRun before saving (it's derived from cron + lastRun)
+  const toSave = schedules.map(({ nextRun, ...rest }) => rest);
+  fs.writeFileSync(schedulesFilePath(dispatchRoot), JSON.stringify(toSave, null, 2), 'utf8');
+}
+
+function findSchedule(dispatchRoot, id) {
+  const schedules = loadSchedules(dispatchRoot);
+  return schedules.find(s => s.id === id) || null;
+}
+
+function saveSchedule(dispatchRoot, schedule) {
+  const schedules = loadSchedules(dispatchRoot);
+  const idx = schedules.findIndex(s => s.id === schedule.id);
+  if (idx >= 0) {
+    schedules[idx] = { ...schedules[idx], ...schedule };
+  } else {
+    schedules.push(schedule);
+  }
+  saveSchedules(dispatchRoot, schedules);
+  return schedule;
+}
+
+function deleteSchedule(dispatchRoot, id) {
+  const schedules = loadSchedules(dispatchRoot);
+  const idx = schedules.findIndex(s => s.id === id);
+  if (idx === -1) return false;
+  schedules.splice(idx, 1);
+  saveSchedules(dispatchRoot, schedules);
+  return true;
+}
+
+/** Convert a Date to a one-shot cron expression: "M H D Mon *" */
+function dateToCron(date) {
+  return `${date.getMinutes()} ${date.getHours()} ${date.getDate()} ${date.getMonth() + 1} *`;
+}
+
+function createSchedule(dispatchRoot, fields) {
+  const id = 'sched-' + Date.now();
+  const schedule = {
+    id,
+    name: fields.name,
+    type: fields.type || 'prompt',
+    repo: fields.repo,
+    cron: fields.cron,
+    prompt: fields.prompt || null,
+    model: fields.model || 'claude-opus-4-6',
+    loopType: fields.loopType || null,
+    agentSpec: fields.agentSpec || null,
+    command: fields.command || null,
+    recurring: fields.recurring !== undefined ? !!fields.recurring : false,
+    enabled: true,
+    concurrency: fields.concurrency || 'skip',
+    created: new Date().toISOString(),
+    lastRun: null,
+    lastRunStatus: null,
+    lastRunJobId: null,
+  };
+  saveSchedule(dispatchRoot, schedule);
+  return { ...schedule, nextRun: computeNextRun(schedule.cron, new Date()) || null };
+}
+
+function updateSchedule(dispatchRoot, id, fields) {
+  const schedules = loadSchedules(dispatchRoot);
+  const idx = schedules.findIndex(s => s.id === id);
+  if (idx === -1) return null;
+  const allowed = ['name', 'type', 'repo', 'cron', 'prompt', 'model', 'loopType', 'agentSpec', 'command', 'concurrency', 'recurring'];
+  for (const key of allowed) {
+    if (fields[key] !== undefined) schedules[idx][key] = fields[key];
+  }
+  saveSchedules(dispatchRoot, schedules);
+  return loadSchedules(dispatchRoot).find(s => s.id === id);
+}
+
+function toggleSchedule(dispatchRoot, id) {
+  const schedules = loadSchedules(dispatchRoot);
+  const idx = schedules.findIndex(s => s.id === id);
+  if (idx === -1) return null;
+  schedules[idx].enabled = !schedules[idx].enabled;
+  saveSchedules(dispatchRoot, schedules);
+  return loadSchedules(dispatchRoot).find(s => s.id === id);
+}
+
+function updateScheduleLastRun(dispatchRoot, id, lastRun, lastRunStatus, lastRunJobId) {
+  const schedules = loadSchedules(dispatchRoot);
+  const idx = schedules.findIndex(s => s.id === id);
+  if (idx === -1) return null;
+  schedules[idx].lastRun = lastRun;
+  schedules[idx].lastRunStatus = lastRunStatus;
+  if (lastRunJobId !== undefined) schedules[idx].lastRunJobId = lastRunJobId;
+  saveSchedules(dispatchRoot, schedules);
+  return schedules[idx];
+}
+
+/**
+ * Get adjacent schedules — other schedules whose next run is within windowHours of the given schedule's next run.
+ */
+function getAdjacentSchedules(dispatchRoot, scheduleId, windowHours) {
+  windowHours = windowHours || 2;
+  const schedules = loadSchedules(dispatchRoot);
+  const target = schedules.find(s => s.id === scheduleId);
+  if (!target || !target.nextRun) return [];
+  const targetTime = new Date(target.nextRun).getTime();
+  const windowMs = windowHours * 60 * 60 * 1000;
+  return schedules.filter(s => {
+    if (s.id === scheduleId || !s.enabled || !s.nextRun) return false;
+    return Math.abs(new Date(s.nextRun).getTime() - targetTime) <= windowMs;
+  });
+}
+
+// ── Schedule events ──────────────────────────────────────────
+
+function eventsFilePath(dispatchRoot) {
+  return path.join(runtimeDir(dispatchRoot), SCHEDULE_EVENTS_FILENAME);
+}
+
+function loadScheduleEvents(dispatchRoot, opts) {
+  opts = opts || {};
+  const fp = eventsFilePath(dispatchRoot);
+  let events = [];
+  try {
+    if (fs.existsSync(fp)) {
+      events = JSON.parse(fs.readFileSync(fp, 'utf8'));
+    }
+  } catch { /* corrupt file */ }
+  if (opts.scheduleId) events = events.filter(e => e.scheduleId === opts.scheduleId);
+  if (opts.type) events = events.filter(e => e.type === opts.type);
+  // Most recent first
+  events.sort((a, b) => (b.at || b.startedAt || '').localeCompare(a.at || a.startedAt || ''));
+  if (opts.limit) events = events.slice(0, opts.limit);
+  return events;
+}
+
+function appendScheduleEvent(dispatchRoot, event) {
+  const dir = runtimeDir(dispatchRoot);
+  fs.mkdirSync(dir, { recursive: true });
+  const fp = eventsFilePath(dispatchRoot);
+  let events = [];
+  try {
+    if (fs.existsSync(fp)) events = JSON.parse(fs.readFileSync(fp, 'utf8'));
+  } catch { /* corrupt */ }
+  event.id = event.id || ('evt-' + Date.now());
+  events.push(event);
+  // Trim to rolling window
+  if (events.length > MAX_EVENTS) events = events.slice(events.length - MAX_EVENTS);
+  fs.writeFileSync(fp, JSON.stringify(events, null, 2), 'utf8');
+  return event;
+}
+
+function clearScheduleEvents(dispatchRoot, scheduleId) {
+  const fp = eventsFilePath(dispatchRoot);
+  if (!fs.existsSync(fp)) return;
+  if (!scheduleId) {
+    fs.writeFileSync(fp, '[]', 'utf8');
+    return;
+  }
+  let events = [];
+  try { events = JSON.parse(fs.readFileSync(fp, 'utf8')); } catch {}
+  events = events.filter(e => e.scheduleId !== scheduleId);
+  fs.writeFileSync(fp, JSON.stringify(events, null, 2), 'utf8');
+}
+
+// ── Schedule lockfiles ───────────────────────────────────────
+
+function locksDir(dispatchRoot) {
+  return path.join(runtimeDir(dispatchRoot), SCHEDULE_LOCKS_DIR);
+}
+
+function scheduleLogPath(dispatchRoot, scheduleId) {
+  const dir = path.join(runtimeDir(dispatchRoot), SCHEDULE_LOGS_DIR);
+  fs.mkdirSync(dir, { recursive: true });
+  return path.join(dir, `${scheduleId}.log`);
+}
+
+function acquireScheduleLock(dispatchRoot, scheduleId, jobId) {
+  const dir = locksDir(dispatchRoot);
+  fs.mkdirSync(dir, { recursive: true });
+  const lockFile = path.join(dir, `${scheduleId}.lock`);
+
+  // Check if lock already exists (per-schedule concurrency: skip)
+  if (fs.existsSync(lockFile)) {
+    try {
+      const lock = JSON.parse(fs.readFileSync(lockFile, 'utf8'));
+      // Check if PID is still alive
+      try { process.kill(lock.pid, 0); return null; } catch { /* stale lock */ }
+    } catch { /* corrupt lock file */ }
+  }
+
+  const lock = { pid: process.pid, startedAt: new Date().toISOString(), scheduleId, jobId };
+  fs.writeFileSync(lockFile, JSON.stringify(lock, null, 2), 'utf8');
+  return lock;
+}
+
+function releaseScheduleLock(dispatchRoot, scheduleId) {
+  const lockFile = path.join(locksDir(dispatchRoot), `${scheduleId}.lock`);
+  try { fs.unlinkSync(lockFile); } catch { /* already gone */ }
+}
+
+function getActiveLocks(dispatchRoot) {
+  const dir = locksDir(dispatchRoot);
+  if (!fs.existsSync(dir)) return [];
+  const locks = [];
+  for (const file of fs.readdirSync(dir)) {
+    if (!file.endsWith('.lock')) continue;
+    try {
+      const lock = JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8'));
+      // Verify PID is still alive
+      try { process.kill(lock.pid, 0); locks.push(lock); } catch { /* stale — skip */ }
+    } catch { /* corrupt */ }
+  }
+  return locks;
+}
+
+// ── Crontab sync ─────────────────────────────────────────────
+
+const CRONTAB_FENCE_BEGIN = '# dispatch-schedule-begin';
+const CRONTAB_FENCE_END = '# dispatch-schedule-end';
+
+function generateCrontabBlock(dispatchRoot) {
+  const schedules = loadSchedules(dispatchRoot);
+  const absRoot = path.resolve(dispatchRoot);
+  const nodeCmd = process.execPath;
+  const cliPath = path.join(absRoot, 'cli.js');
+  const lines = [CRONTAB_FENCE_BEGIN];
+  for (const s of schedules) {
+    if (!s.enabled) continue;
+    const logPath = path.join(absRoot, '.dispatch', 'runtime', SCHEDULE_LOGS_DIR, `${s.id}.log`);
+    lines.push(`# ${s.id} | ${s.name} | ${s.cron}`);
+    lines.push(`${s.cron} cd "${absRoot}" && "${nodeCmd}" "${cliPath}" schedule run ${s.id} >> "${logPath}" 2>&1`);
+  }
+  lines.push(CRONTAB_FENCE_END);
+  return lines.join('\n');
+}
+
+function syncCrontab(dispatchRoot) {
+  const newBlock = generateCrontabBlock(dispatchRoot);
+  let existing = '';
+  try {
+    existing = execFileSync('crontab', ['-l'], { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+  } catch { /* no crontab */ }
+
+  // Remove existing fence block
+  const fenceRe = new RegExp(
+    escapeRegExp(CRONTAB_FENCE_BEGIN) + '[\\s\\S]*?' + escapeRegExp(CRONTAB_FENCE_END) + '\\n?',
+    'g'
+  );
+  let updated = existing.replace(fenceRe, '').trimEnd();
+
+  // Append new block
+  if (updated.length > 0) updated += '\n';
+  updated += newBlock + '\n';
+
+  // Write back via stdin
+  execFileSync('crontab', ['-'], { input: updated, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+  return { synced: true, enabledCount: loadSchedules(dispatchRoot).filter(s => s.enabled).length };
+}
+
+function escapeRegExp(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 module.exports = {
   parseTaskFile,
   parseActivityLog,
@@ -1566,4 +2067,34 @@ module.exports = {
   parseLoopRunDetailed,
   parseAllLoopRuns,
   parseLoopState,
+  // Cron parsing
+  dateToCron,
+  parseCronField,
+  cronMatchesDate,
+  computeNextRun,
+  describeCron,
+  validateCron,
+  // Schedule CRUD
+  loadSchedules,
+  saveSchedules,
+  findSchedule,
+  saveSchedule,
+  createSchedule,
+  updateSchedule,
+  deleteSchedule,
+  toggleSchedule,
+  getAdjacentSchedules,
+  updateScheduleLastRun,
+  // Schedule events
+  loadScheduleEvents,
+  appendScheduleEvent,
+  clearScheduleEvents,
+  // Schedule locks
+  acquireScheduleLock,
+  releaseScheduleLock,
+  getActiveLocks,
+  scheduleLogPath,
+  // Crontab sync
+  syncCrontab,
+  generateCrontabBlock,
 };

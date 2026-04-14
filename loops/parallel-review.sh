@@ -129,7 +129,7 @@ EOF
 exec > >(tee -a "$LOG_FILE") 2>&1
 
 # Write LOOP_STATUS on unexpected exit
-trap 'echo "LOOP_STATUS: failed"' ERR
+trap 'printf "\nLOOP_STATUS: failed\n"; echo failed > "$RUN_DIR/status.txt"' ERR
 
 # ---------------------------------------------------------------------------
 # Prompt templates
@@ -285,6 +285,7 @@ while true; do
   if [[ -z "$diff" ]]; then
     echo "(nothing to review — no changes since start)"
     echo "LOOP_STATUS: completed"
+    echo completed > "$RUN_DIR/status.txt"
     exit 0
   fi
 
@@ -337,10 +338,12 @@ ${combined_reviews}"
   echo "$synthesis" > "$RUN_DIR/synthesis_iter${iteration}.txt"
   echo "------------------"
 
-  if echo "$synthesis" | grep -qx "ALL ISSUES RESOLVED"; then
+  final_synthesis_line=$(printf '%s\n' "$synthesis" | awk 'NF { line=$0 } END { print line }')
+  if [[ "$final_synthesis_line" == "ALL ISSUES RESOLVED" ]]; then
     echo ""
     echo "All issues resolved. Loop done."
     echo "LOOP_STATUS: completed"
+    echo completed > "$RUN_DIR/status.txt"
     exit 0
   fi
 

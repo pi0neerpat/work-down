@@ -102,10 +102,13 @@ export default function AllTasksView({
   const [selectedRepos, setSelectedRepos] = useState(() => savedFilters?.repos ?? new Set(repoNames))
   const [bugFilter, setBugFilter] = useState(() => savedFilters?.bugOnly ?? false)
 
-  // Sync repo filter when repos load (only if no saved filter)
+  // Sync repo filter when repos load — add any newly discovered repos (first visit only)
   useMemo(() => {
-    if (repoNames.length > 0 && selectedRepos.size === 0) {
-      setSelectedRepos(new Set(repoNames))
+    if (repoNames.length > 0 && savedFilters === null) {
+      const newRepos = repoNames.filter(r => !selectedRepos.has(r))
+      if (newRepos.length > 0) {
+        setSelectedRepos(new Set([...selectedRepos, ...newRepos]))
+      }
     }
   }, [repoNames.join(',')]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -140,9 +143,9 @@ export default function AllTasksView({
   // Apply filters
   const filteredTasks = useMemo(() => {
     return allTasks.filter(t => {
-      if (selectedTimeframes.size > 0 && !selectedTimeframes.has(t.timeframe)) return false
-      if (selectedStatuses.size > 0 && !selectedStatuses.has(t.status)) return false
-      if (selectedRepos.size > 0 && !selectedRepos.has(t.repoName)) return false
+      if (!selectedTimeframes.has(t.timeframe)) return false
+      if (!selectedStatuses.has(t.status)) return false
+      if (!selectedRepos.has(t.repoName)) return false
       if (bugFilter && !t.isBug) return false
       return true
     })

@@ -50,12 +50,15 @@ export default function LoopsView({ loops, overview, onSelectLoop }) {
   const [selectedRepos, setSelectedRepos] = useState(() => savedFilters?.repos ?? new Set(repos))
   const [selectedTypes, setSelectedTypes] = useState(() => savedFilters?.types ?? new Set(LOOP_TYPES.map(lt => lt.id)))
 
-  // Sync repo filter when repos change (only if empty)
+  // Sync repo filter when repos change — add any newly discovered repos (first visit only)
   useEffect(() => {
-    if (repos.length > 0 && selectedRepos.size === 0) {
-      setSelectedRepos(new Set(repos))
+    if (repos.length > 0 && savedFilters === null) {
+      const newRepos = repos.filter(r => !selectedRepos.has(r))
+      if (newRepos.length > 0) {
+        setSelectedRepos(new Set([...selectedRepos, ...newRepos]))
+      }
     }
-  }, [repos, selectedRepos.size])
+  }, [repos]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     saveFilters(STORAGE_KEY, { statuses: selectedStatuses, repos: selectedRepos, types: selectedTypes })
@@ -63,9 +66,9 @@ export default function LoopsView({ loops, overview, onSelectLoop }) {
 
   const filteredItems = useMemo(() => {
     return allItems.filter(w => {
-      if (selectedStatuses.size > 0 && !selectedStatuses.has(w.filterStatus)) return false
-      if (selectedRepos.size > 0 && !selectedRepos.has(w.repo)) return false
-      if (selectedTypes.size > 0 && !selectedTypes.has(w.loopType)) return false
+      if (!selectedStatuses.has(w.filterStatus)) return false
+      if (!selectedRepos.has(w.repo)) return false
+      if (!selectedTypes.has(w.loopType)) return false
       return true
     })
   }, [allItems, selectedStatuses, selectedRepos, selectedTypes])

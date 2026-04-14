@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Send, FileText, X, RefreshCcw } from 'lucide-react'
+import { Send, FileText, X, RefreshCcw, CalendarClock } from 'lucide-react'
 import { cn } from '../lib/utils'
 import { DEFAULT_REPO_COLOR } from '../lib/constants'
 import { useAgentModels } from '../lib/useAgentModels'
@@ -7,6 +7,51 @@ import { useSkills } from '../lib/useSkills'
 import DispatchSettingsRow from './DispatchSettingsRow'
 import SkillsSelector from './SkillsSelector'
 import { AgentModelPicker, LOOP_TYPES, defaultAgentModel, fmtAgent } from './AgentModelPicker'
+
+const CRON_PRESETS = [
+  { label: 'Weekdays 9am', value: '0 9 * * 1-5' },
+  { label: 'Daily 9am', value: '0 9 * * *' },
+  { label: 'Daily 2am', value: '0 2 * * *' },
+  { label: 'Every 6h', value: '0 */6 * * *' },
+  { label: 'Hourly', value: '0 * * * *' },
+  { label: 'Weekly Mon 9am', value: '0 9 * * 1' },
+]
+
+/** Build quick "run at" presets relative to now */
+function buildRunAtPresets() {
+  const now = new Date()
+  const presets = []
+  const fmt = (d) => d.toISOString().slice(0, 16) // datetime-local compatible
+  const fmtTime = (d) => d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+
+  // "In X" presets — only include if they land before midnight-ish
+  for (const [mins, label] of [[30, 'In 30 min'], [60, 'In 1 hour'], [120, 'In 2 hours'], [180, 'In 3 hours']]) {
+    const d = new Date(now.getTime() + mins * 60000)
+    presets.push({ label: `${label} (${fmtTime(d)})`, value: fmt(d) })
+  }
+
+  // Tonight at 10pm (if it's before 10pm)
+  const tonight10 = new Date(now)
+  tonight10.setHours(22, 0, 0, 0)
+  if (tonight10 > now) {
+    presets.push({ label: `Tonight 10 PM`, value: fmt(tonight10) })
+  }
+
+  // Tomorrow 9am
+  const tomorrow9 = new Date(now)
+  tomorrow9.setDate(tomorrow9.getDate() + 1)
+  tomorrow9.setHours(9, 0, 0, 0)
+  presets.push({ label: 'Tomorrow 9 AM', value: fmt(tomorrow9) })
+
+  return presets
+}
+
+/** Convert datetime-local string to cron: "M H D Mon *" */
+function datetimeToCron(dtStr) {
+  const d = new Date(dtStr)
+  if (isNaN(d)) return null
+  return `${d.getMinutes()} ${d.getHours()} ${d.getDate()} ${d.getMonth() + 1} *`
+}
 
 function readSaved() {
   try { return JSON.parse(localStorage.getItem('dispatch-settings')) || {} }
@@ -43,6 +88,14 @@ export default function DispatchView({ overview, onDispatch, onLoopDispatch, ini
   const [dispatching, setDispatching] = useState(false)
   const [btnPhase, setBtnPhase] = useState('idle') // idle | shaking | sliding | hidden | returning
   const [dispatchError, setDispatchError] = useState(null)
+
+  // Schedule state
+  const [scheduleEnabled, setScheduleEnabled] = useState(false)
+  const [scheduleName, setScheduleName] = useState('')
+  const [scheduleRunAt, setScheduleRunAt] = useState('') // ISO datetime-local string
+  const [scheduleRecurring, setScheduleRecurring] = useState(false)
+  const [scheduleCron, setScheduleCron] = useState('0 9 * * 1-5')
+  const [scheduleCreated, setScheduleCreated] = useState(null)
 
   // Loop mode state
   const [loopType, setLoopType] = useState(s.loopType || 'linear-implementation')
@@ -161,13 +214,62 @@ export default function DispatchView({ overview, onDispatch, onLoopDispatch, ini
 
     setDispatching(true)
     try {
+      // Create schedule if enabled
+      if (scheduleEnabled) {
+        const cron = scheduleRecurring
+          ? scheduleCron.trim()
+          : datetimeToCron(scheduleRunAt)
+        if (!cron) {
+          setDispatchError('Please select a time for the scheduled run')
+          setDispatching(false)
+          setBtnPhase('idle')
+          return
+        }
+        const schedBody = {
+          name: scheduleName.trim() || taskText.slice(0, 60),
+          repo,
+          cron,
+          prompt: taskText,
+          model,
+          type: 'job',
+          recurring: scheduleRecurring,
+        }
+        const schedRes = await fetch('/api/schedules', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(schedBody),
+        })
+        if (schedRes.ok) {
+          const data = await schedRes.json()
+          setScheduleCreated(data.schedule || data)
+          setTimeout(() => setScheduleCreated(null), 5000)
+        } else {
+          const err = await schedRes.json().catch(() => ({}))
+          setDispatchError(err.error || `Schedule creation failed (${schedRes.status})`)
+          setDispatching(false)
+          setBtnPhase('idle')
+          return
+        }
+        // Schedule-only — don't dispatch immediately
+        setPrompt('')
+        setScheduleEnabled(false)
+        setScheduleName('')
+        setScheduleRunAt('')
+        setScheduleRecurring(false)
+        onDispatchComplete?.()
+        setDispatching(false)
+        setTimeout(() => setBtnPhase('returning'), 1800)
+        setTimeout(() => setBtnPhase('idle'), 2400)
+        return
+      }
+
       await onDispatch?.({
         repo,
         taskText,
         originalTask: initialPrompt || null,
         baseBranch: baseBranch.trim() || defaultBranch,
         model,
-      maxTurns: turnsUnsupported ? null : maxTurns,
+        maxTurns: turnsUnsupported ? null : maxTurns,
         autoMerge,
         useWorktree,
         plainOutput,
@@ -202,6 +304,49 @@ export default function DispatchView({ overview, onDispatch, onLoopDispatch, ini
     setTimeout(() => setLoopBtnPhase('hidden'), 800)
 
     try {
+      // Create loop schedule if enabled
+      if (scheduleEnabled) {
+        const cron = scheduleRecurring
+          ? scheduleCron.trim()
+          : datetimeToCron(scheduleRunAt)
+        if (!cron) {
+          setDispatchError('Please select a time for the scheduled run')
+          setLoopBtnPhase('idle')
+          return
+        }
+        const agentSpecStr = loopType === 'parallel-review' ? fmtAgent(reviewers[0] || defaultAgentModel()) : fmtAgent(loopAgentSpec)
+        const schedBody = {
+          name: scheduleName.trim() || `${loopType} loop`,
+          repo,
+          cron,
+          type: 'loop',
+          loopType,
+          agentSpec: agentSpecStr,
+          recurring: scheduleRecurring,
+        }
+        const schedRes = await fetch('/api/schedules', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(schedBody),
+        })
+        if (schedRes.ok) {
+          const data = await schedRes.json()
+          setScheduleCreated(data.schedule || data)
+          setTimeout(() => setScheduleCreated(null), 5000)
+        } else {
+          const err = await schedRes.json().catch(() => ({}))
+          setDispatchError(err.error || `Schedule creation failed (${schedRes.status})`)
+          setLoopBtnPhase('idle')
+          return
+        }
+        setScheduleEnabled(false)
+        setScheduleName('')
+        setScheduleRunAt('')
+        setScheduleRecurring(false)
+        setLoopBtnPhase('idle')
+        return
+      }
+
       const body = { repo, loopType, promptContent: loopPrompt }
       if (loopType === 'parallel-review') {
         body.reviewerAgents = reviewers.map(fmtAgent)
@@ -218,7 +363,7 @@ export default function DispatchView({ overview, onDispatch, onLoopDispatch, ini
       setLoopBtnPhase('idle')
       setDispatchError(err.message)
     }
-  }, [repo, loopType, loopPrompt, loopAgentSpec, reviewers, synthesizer, implementor, onLoopDispatch, isLoopReady, loopBtnPhase])
+  }, [repo, loopType, loopPrompt, loopAgentSpec, reviewers, synthesizer, implementor, onLoopDispatch, isLoopReady, loopBtnPhase, scheduleEnabled, scheduleRecurring, scheduleCron, scheduleRunAt, scheduleName])
 
   const repoChips = (
     <div>
@@ -299,6 +444,120 @@ export default function DispatchView({ overview, onDispatch, onLoopDispatch, ini
       </div>
     )
   }
+
+  const runAtPresets = scheduleEnabled ? buildRunAtPresets() : []
+
+  const schedulePanel = (
+    <>
+      <div className="rounded-md border border-border bg-card/50 px-3 py-2">
+        <button
+          type="button"
+          onClick={() => setScheduleEnabled(!scheduleEnabled)}
+          className={cn(
+            'flex items-center gap-2 text-[12px] font-medium transition-colors w-full text-left',
+            scheduleEnabled ? 'text-foreground' : 'text-muted-foreground/60 hover:text-muted-foreground'
+          )}
+        >
+          <CalendarClock size={13} />
+          Schedule
+          <span className={cn(
+            'ml-auto text-[10px] px-1.5 py-0.5 rounded transition-all',
+            scheduleEnabled ? 'bg-primary/15 text-primary' : 'bg-transparent text-muted-foreground/30'
+          )}>
+            {scheduleEnabled ? 'ON' : 'OFF'}
+          </span>
+        </button>
+
+        {scheduleEnabled && (
+          <div className="mt-2.5 space-y-2.5 animate-fade-up">
+            {/* Schedule name */}
+            <div>
+              <label className="block text-[10px] font-medium text-muted-foreground mb-1">Name (optional)</label>
+              <input
+                value={scheduleName}
+                onChange={e => setScheduleName(e.target.value)}
+                placeholder="e.g. Deploy staging"
+                className="w-full h-7 px-2 rounded-md border border-border bg-background text-[11px] text-foreground placeholder:text-muted-foreground/30 focus:outline-none focus:border-primary/30"
+              />
+            </div>
+
+            {/* Run at — primary one-shot time picker */}
+            {!scheduleRecurring && (
+              <div>
+                <label className="block text-[10px] font-medium text-muted-foreground mb-1">Run at</label>
+                <div className="flex gap-1.5 flex-wrap mb-1.5">
+                  {runAtPresets.map(p => (
+                    <button
+                      key={p.value}
+                      type="button"
+                      onClick={() => setScheduleRunAt(p.value)}
+                      className={cn(
+                        'px-2 py-0.5 rounded text-[10px] border transition-all',
+                        scheduleRunAt === p.value
+                          ? 'border-primary/40 bg-primary/10 text-foreground'
+                          : 'border-border bg-background text-muted-foreground hover:text-foreground hover:bg-card-hover'
+                      )}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+                <input
+                  type="datetime-local"
+                  value={scheduleRunAt}
+                  onChange={e => setScheduleRunAt(e.target.value)}
+                  className="w-full h-7 px-2 rounded-md border border-border bg-background text-[11px] text-foreground focus:outline-none focus:border-primary/30"
+                />
+              </div>
+            )}
+
+            {/* Recurring toggle + cron input */}
+            <div>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={scheduleRecurring}
+                  onChange={e => setScheduleRecurring(e.target.checked)}
+                  className="rounded border-border"
+                />
+                <span className="text-[11px] text-muted-foreground">Recurring</span>
+              </label>
+
+              {scheduleRecurring && (
+                <div className="mt-1.5">
+                  <label className="block text-[10px] font-medium text-muted-foreground mb-1">Cron expression</label>
+                  <div className="flex gap-1.5">
+                    <input
+                      value={scheduleCron}
+                      onChange={e => setScheduleCron(e.target.value)}
+                      placeholder="0 9 * * 1-5"
+                      className="flex-1 h-7 px-2 rounded-md border border-border bg-background text-[11px] text-foreground placeholder:text-muted-foreground/30 focus:outline-none focus:border-primary/30"
+                      style={{ fontFamily: 'var(--font-mono)' }}
+                    />
+                    <select
+                      value=""
+                      onChange={e => { if (e.target.value) setScheduleCron(e.target.value) }}
+                      className="h-7 px-1.5 rounded-md border border-border bg-background text-[10px] text-muted-foreground focus:outline-none"
+                    >
+                      <option value="">Presets</option>
+                      {CRON_PRESETS.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
+                    </select>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Schedule created confirmation */}
+      {scheduleCreated && (
+        <div className="px-3 py-2 rounded-md border border-emerald-500/20 bg-emerald-500/5 text-[12px] text-emerald-400">
+          Schedule "{scheduleCreated.name}" created — {scheduleCreated.description || scheduleCreated.cron}
+        </div>
+      )}
+    </>
+  )
 
   return (
     <div>
@@ -412,7 +671,7 @@ export default function DispatchView({ overview, onDispatch, onLoopDispatch, ini
             />
           </div>
 
-          {/* Agent + Model + Turns + TUI + Auto-merge + Worktree + Submit */}
+          {/* Agent + Model + Turns + TUI + Auto-merge + Worktree */}
           <div className="flex items-start gap-3 flex-wrap">
             <DispatchSettingsRow
               agent={agent} onSwitchAgent={switchAgent}
@@ -422,14 +681,18 @@ export default function DispatchView({ overview, onDispatch, onLoopDispatch, ini
               autoMerge={autoMerge} setAutoMerge={setAutoMerge}
               plainOutput={plainOutput} setPlainOutput={setPlainOutput}
             />
+          </div>
 
-            <div className="flex-1" />
+          {/* Schedule option */}
+          {schedulePanel}
 
+          {/* Submit */}
+          <div className="flex justify-end">
             {renderGlowButton({
               isReadyFlag: isReady,
               phase: btnPhase,
               icon: Send,
-              label: 'Dispatch',
+              label: scheduleEnabled ? 'Schedule' : 'Dispatch',
               type: 'submit',
             })}
           </div>
@@ -527,13 +790,16 @@ export default function DispatchView({ overview, onDispatch, onLoopDispatch, ini
             </div>
           )}
 
+          {/* Schedule option */}
+          {schedulePanel}
+
           {/* Glow dispatch button */}
           <div className="flex justify-end">
             {renderGlowButton({
               isReadyFlag: isLoopReady,
               phase: loopBtnPhase,
               icon: RefreshCcw,
-              label: 'Dispatch',
+              label: scheduleEnabled ? 'Schedule' : 'Dispatch',
               onClick: handleLoopLaunch,
             })}
           </div>

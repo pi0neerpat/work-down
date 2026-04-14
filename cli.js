@@ -29,11 +29,18 @@
 
 const path = require('path');
 const fs = require('fs');
+const { execFileSync } = require('child_process');
 const {
   parseTaskFile, parseActivityLog, getGitInfo,
   parseSwarmFile, parseSwarmDir, loadConfig,
   writeTaskDone, writeTaskAdd, writeSwarmValidation,
   createCheckpoint, revertCheckpoint, dismissCheckpoint, listCheckpoints,
+  // Schedule
+  loadSchedules, findSchedule, createSchedule, updateSchedule, deleteSchedule,
+  toggleSchedule, getAdjacentSchedules, validateCron, describeCron, computeNextRun,
+  loadScheduleEvents, appendScheduleEvent, clearScheduleEvents,
+  acquireScheduleLock, releaseScheduleLock, getActiveLocks, scheduleLogPath,
+  syncCrontab, parseJobFile, writeJobStatus, updateScheduleLastRun,
 } = require('./parsers');
 
 const DISPATCH_ROOT = path.dirname(__filename);
@@ -440,6 +447,388 @@ function findSwarmFile(id) {
   fail(`swarm agent "${id}" not found in any repo`);
 }
 
+// ── Schedule commands ────────────────────────────────────────
+
+function cmdScheduleList() {
+  const schedules = loadSchedules(DISPATCH_ROOT);
+  const activeLocks = getActiveLocks(DISPATCH_ROOT);
+  out({
+    schedules: schedules.map(s => ({
+      ...s,
+      description: describeCron(s.cron),
+      running: activeLocks.some(l => l.scheduleId === s.id),
+    })),
+    activeCount: activeLocks.length,
+    maxConcurrent: 3,
+  });
+}
+
+function cmdScheduleShow() {
+  const id = positionals[1] || flags.id;
+  if (!id) fail('schedule id required: schedule show <id>');
+  const schedule = findSchedule(DISPATCH_ROOT, id);
+  if (!schedule) fail(`schedule "${id}" not found`);
+  const events = loadScheduleEvents(DISPATCH_ROOT, { scheduleId: id, limit: 10 });
+  const activeLocks = getActiveLocks(DISPATCH_ROOT);
+  const adjacent = getAdjacentSchedules(DISPATCH_ROOT, id);
+  out({
+    schedule: { ...schedule, description: describeCron(schedule.cron), running: activeLocks.some(l => l.scheduleId === id) },
+    recentEvents: events,
+    adjacentSchedules: adjacent.map(s => ({ id: s.id, name: s.name, cron: s.cron, nextRun: s.nextRun, repo: s.repo })),
+  });
+}
+
+function cmdScheduleAdd() {
+  const name = flags.name;
+  const repo = flags.repo;
+  const cron = flags.cron;
+  const type = flags.type || 'prompt';
+
+  if (!name) fail('--name required');
+  if (!repo) fail('--repo required');
+  if (!cron) fail('--cron required');
+
+  const cronError = validateCron(cron);
+  if (cronError) fail(cronError);
+
+  // Validate repo exists
+  const repoConfig = config.repos.find(r => r.name === repo);
+  if (!repoConfig) fail(`repo "${repo}" not found in config`);
+
+  const validTypes = ['prompt', 'job', 'loop', 'shell'];
+  if (!validTypes.includes(type)) fail(`--type must be one of: ${validTypes.join(', ')}`);
+  if ((type === 'prompt' || type === 'job') && !flags.prompt) fail('--prompt required for prompt/job-type schedules');
+  if (type === 'loop' && !flags['loop-type']) fail('--loop-type required for loop-type schedules');
+  if (type === 'shell' && !flags.command) fail('--command required for shell-type schedules');
+
+  const schedule = createSchedule(DISPATCH_ROOT, {
+    name,
+    type,
+    repo,
+    cron,
+    prompt: flags.prompt || null,
+    model: flags.model || 'claude-opus-4-6',
+    loopType: flags['loop-type'] || null,
+    agentSpec: flags['agent-spec'] || null,
+    command: flags.command || null,
+    concurrency: flags.concurrency || 'skip',
+  });
+
+  // Auto-sync crontab
+  let cronSynced = false;
+  try { syncCrontab(DISPATCH_ROOT); cronSynced = true; } catch { /* non-fatal */ }
+
+  const adjacent = getAdjacentSchedules(DISPATCH_ROOT, schedule.id);
+  const activeLocks = getActiveLocks(DISPATCH_ROOT);
+  out({
+    schedule: { ...schedule, description: describeCron(schedule.cron) },
+    adjacentSchedules: adjacent.map(s => ({ id: s.id, name: s.name, cron: s.cron, nextRun: s.nextRun, repo: s.repo })),
+    activeCount: activeLocks.length,
+    maxConcurrent: 3,
+    cronSynced,
+  });
+}
+
+function cmdScheduleEdit() {
+  const id = positionals[1] || flags.id;
+  if (!id) fail('schedule id required: schedule edit <id>');
+  if (!findSchedule(DISPATCH_ROOT, id)) fail(`schedule "${id}" not found`);
+
+  if (flags.cron) {
+    const cronError = validateCron(flags.cron);
+    if (cronError) fail(cronError);
+  }
+  if (flags.repo) {
+    const repoConfig = config.repos.find(r => r.name === flags.repo);
+    if (!repoConfig) fail(`repo "${flags.repo}" not found in config`);
+  }
+
+  const updated = updateSchedule(DISPATCH_ROOT, id, {
+    name: flags.name,
+    type: flags.type,
+    repo: flags.repo,
+    cron: flags.cron,
+    prompt: flags.prompt,
+    model: flags.model,
+    loopType: flags['loop-type'],
+    agentSpec: flags['agent-spec'],
+    command: flags.command,
+    concurrency: flags.concurrency,
+  });
+
+  let cronSynced = false;
+  try { syncCrontab(DISPATCH_ROOT); cronSynced = true; } catch {}
+
+  const adjacent = getAdjacentSchedules(DISPATCH_ROOT, id);
+  const activeLocks = getActiveLocks(DISPATCH_ROOT);
+  out({
+    schedule: { ...updated, description: describeCron(updated.cron) },
+    adjacentSchedules: adjacent.map(s => ({ id: s.id, name: s.name, cron: s.cron, nextRun: s.nextRun, repo: s.repo })),
+    activeCount: activeLocks.length,
+    maxConcurrent: 3,
+    cronSynced,
+  });
+}
+
+function cmdScheduleDelete() {
+  const id = positionals[1] || flags.id;
+  if (!id) fail('schedule id required: schedule delete <id>');
+  if (!deleteSchedule(DISPATCH_ROOT, id)) fail(`schedule "${id}" not found`);
+
+  let cronSynced = false;
+  try { syncCrontab(DISPATCH_ROOT); cronSynced = true; } catch {}
+  out({ deleted: id, cronSynced });
+}
+
+function cmdScheduleEnable() {
+  const id = positionals[1] || flags.id;
+  if (!id) fail('schedule id required');
+  const schedule = findSchedule(DISPATCH_ROOT, id);
+  if (!schedule) fail(`schedule "${id}" not found`);
+  if (schedule.enabled) { out({ schedule, message: 'already enabled' }); return; }
+  const updated = toggleSchedule(DISPATCH_ROOT, id);
+  let cronSynced = false;
+  try { syncCrontab(DISPATCH_ROOT); cronSynced = true; } catch {}
+  out({ schedule: updated, cronSynced });
+}
+
+function cmdScheduleDisable() {
+  const id = positionals[1] || flags.id;
+  if (!id) fail('schedule id required');
+  const schedule = findSchedule(DISPATCH_ROOT, id);
+  if (!schedule) fail(`schedule "${id}" not found`);
+  if (!schedule.enabled) { out({ schedule, message: 'already disabled' }); return; }
+  const updated = toggleSchedule(DISPATCH_ROOT, id);
+  let cronSynced = false;
+  try { syncCrontab(DISPATCH_ROOT); cronSynced = true; } catch {}
+  out({ schedule: updated, cronSynced });
+}
+
+function cmdScheduleActive() {
+  const locks = getActiveLocks(DISPATCH_ROOT);
+  const schedules = loadSchedules(DISPATCH_ROOT);
+  const active = locks.map(lock => {
+    const sched = schedules.find(s => s.id === lock.scheduleId);
+    return { ...lock, name: sched?.name || 'unknown', repo: sched?.repo || 'unknown', cron: sched?.cron || '' };
+  });
+  out({ active, count: active.length, maxConcurrent: 3 });
+}
+
+function cmdScheduleEvents() {
+  const limit = flags.limit ? parseInt(flags.limit, 10) : 20;
+  const scheduleId = flags['schedule-id'] || null;
+  const type = flags.type || null;
+  const events = loadScheduleEvents(DISPATCH_ROOT, { scheduleId, type, limit });
+  out({ events });
+}
+
+function cmdScheduleClearEvents() {
+  const id = positionals[1] || flags.id || null;
+  clearScheduleEvents(DISPATCH_ROOT, id);
+  out({ cleared: id || 'all' });
+}
+
+function cmdScheduleSync() {
+  try {
+    const result = syncCrontab(DISPATCH_ROOT);
+    out(result);
+  } catch (err) {
+    fail(`crontab sync failed: ${err.message}`);
+  }
+}
+
+function cmdScheduleRun() {
+  const id = positionals[1] || flags.id;
+  if (!id) fail('schedule id required: schedule run <id>');
+
+  const schedule = findSchedule(DISPATCH_ROOT, id);
+  if (!schedule) fail(`schedule "${id}" not found`);
+
+  const repoConfig = config.repos.find(r => r.name === schedule.repo);
+  if (!repoConfig) fail(`repo "${schedule.repo}" not found in config`);
+
+  // Check global concurrency limit
+  const activeLocks = getActiveLocks(DISPATCH_ROOT);
+  const maxConcurrent = 3;
+  if (activeLocks.length >= maxConcurrent) {
+    const event = appendScheduleEvent(DISPATCH_ROOT, {
+      scheduleId: id, scheduleName: schedule.name, repo: schedule.repo,
+      type: 'skipped', at: new Date().toISOString(),
+      reason: `max concurrent (${activeLocks.length}/${maxConcurrent}) reached`,
+    });
+    out({ skipped: true, reason: event.reason });
+    return;
+  }
+
+  // Check per-schedule concurrency (skip)
+  if (schedule.concurrency === 'skip') {
+    const lock = acquireScheduleLock(DISPATCH_ROOT, id, null);
+    if (!lock) {
+      const event = appendScheduleEvent(DISPATCH_ROOT, {
+        scheduleId: id, scheduleName: schedule.name, repo: schedule.repo,
+        type: 'skipped', at: new Date().toISOString(),
+        reason: 'previous run still active',
+      });
+      out({ skipped: true, reason: event.reason });
+      return;
+    }
+  } else {
+    acquireScheduleLock(DISPATCH_ROOT, id, null);
+  }
+
+  // Log run start
+  const startedAt = new Date().toISOString();
+  const logPath = scheduleLogPath(DISPATCH_ROOT, id);
+  const runHeader = `\n${'═'.repeat(60)}\nRUN ${startedAt}\nSchedule: ${schedule.name} (${id})\nType: ${schedule.type} | Repo: ${schedule.repo}\n${'─'.repeat(60)}\n`;
+  fs.appendFileSync(logPath, runHeader, 'utf8');
+
+  appendScheduleEvent(DISPATCH_ROOT, {
+    scheduleId: id, scheduleName: schedule.name, repo: schedule.repo,
+    type: 'started', startedAt,
+  });
+
+  let exitCode = 0;
+  let errorMsg = null;
+  let jobId = null;
+  let jobFilePath = null;
+  const repoCwd = repoConfig.resolvedPath;
+
+  try {
+    if (schedule.type === 'job') {
+      // Dispatch job — create tracked job file, run claude --print with dispatch prompt
+      const slug = schedule.name
+        .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 50) || 'scheduled-job';
+      const date = new Date().toISOString().slice(0, 10);
+      const jobsDir = path.join(repoCwd, 'notes', 'jobs');
+      fs.mkdirSync(jobsDir, { recursive: true });
+
+      // Allocate unique job file name
+      let seq = 0;
+      let fileName;
+      while (seq < 1000) {
+        const suffix = seq === 0 ? '' : `-${seq + 1}`;
+        fileName = `${date}-${slug}${suffix}.md`;
+        jobFilePath = path.join(jobsDir, fileName);
+        if (!fs.existsSync(jobFilePath)) break;
+        seq++;
+      }
+      jobId = fileName.replace(/\.md$/, '');
+
+      const now = new Date();
+      const pad = n => String(n).padStart(2, '0');
+      const timestamp = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+      const singleLine = v => String(v || '').replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
+
+      // Write job file
+      const jobLines = [
+        `# Job Task: ${singleLine(schedule.prompt)}`,
+        `Started: ${timestamp}`,
+        'Status: In progress',
+        `Repo: ${schedule.repo}`,
+        `SkipPermissions: true`,
+      ];
+      if (schedule.model) jobLines.push(`Model: ${schedule.model}`);
+      try {
+        const headSha = execFileSync('git', ['-C', repoCwd, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+        jobLines.push(`StartCommit: ${headSha}`);
+      } catch { /* no git */ }
+      jobLines.push('', '## Progress', `- [${timestamp}] Scheduled dispatch (${schedule.name})`, '', '## Results', '');
+      fs.writeFileSync(jobFilePath, jobLines.join('\n'), 'utf8');
+
+      fs.appendFileSync(logPath, `Job file: ${jobFilePath}\nJob ID: ${jobId}\n`, 'utf8');
+
+      // Build dispatch prompt
+      const jobRelPath = `notes/jobs/${fileName}`;
+      const dispatchPrompt = schedule.prompt
+        + '\n\nUse a strictly linear approach. Do not run tasks in parallel and do not delegate to sub-agents.'
+        + `\n\nWrite progress to the existing file just created: ${jobRelPath}`;
+
+      // Run claude --print
+      const claudeArgs = ['--print', '--dangerously-skip-permissions', '-p', dispatchPrompt];
+      if (schedule.model) { claudeArgs.push('--model', schedule.model); }
+      const output = execFileSync('claude', claudeArgs, {
+        cwd: repoCwd, encoding: 'utf8', timeout: 2 * 60 * 60 * 1000,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: { ...process.env, CLAUDE_PROJECT_DIR: repoCwd },
+      });
+      fs.appendFileSync(logPath, output, 'utf8');
+
+      // Update job file status on success
+      try { writeJobStatus(jobFilePath, 'completed'); } catch { /* best effort */ }
+
+    } else if (schedule.type === 'loop') {
+      // Launch loop script
+      const loopType = schedule.loopType || 'linear-implementation';
+      const scriptPath = path.join(DISPATCH_ROOT, 'loops', `${loopType}.sh`);
+      if (!fs.existsSync(scriptPath)) fail(`loop script not found: ${scriptPath}`);
+      const loopArgs = ['--repo', repoCwd];
+      if (schedule.agentSpec) { loopArgs.push('--agent', schedule.agentSpec); }
+      const output = execFileSync('bash', [scriptPath, ...loopArgs], {
+        cwd: DISPATCH_ROOT, encoding: 'utf8', timeout: 4 * 60 * 60 * 1000,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      fs.appendFileSync(logPath, output, 'utf8');
+    } else if (schedule.type === 'shell') {
+      // Run arbitrary shell command
+      const output = execFileSync('bash', ['-c', schedule.command], {
+        cwd: repoCwd, encoding: 'utf8', timeout: 60 * 60 * 1000,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      fs.appendFileSync(logPath, output, 'utf8');
+    } else {
+      // Prompt type — claude --print (no job tracking)
+      const claudeArgs = ['--print', '-p', schedule.prompt];
+      if (schedule.model) { claudeArgs.push('--model', schedule.model); }
+      const output = execFileSync('claude', claudeArgs, {
+        cwd: repoCwd, encoding: 'utf8', timeout: 2 * 60 * 60 * 1000,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: { ...process.env, CLAUDE_PROJECT_DIR: repoCwd },
+      });
+      fs.appendFileSync(logPath, output, 'utf8');
+    }
+  } catch (err) {
+    exitCode = err.status || 1;
+    errorMsg = err.message || 'unknown error';
+    const stderr = err.stderr ? String(err.stderr).slice(0, 2000) : '';
+    const stdout = err.stdout ? String(err.stdout) : '';
+    fs.appendFileSync(logPath, stdout + (stderr ? `\nSTDERR:\n${stderr}` : ''), 'utf8');
+    // Mark job file as failed if it was created
+    if (jobFilePath && fs.existsSync(jobFilePath)) {
+      try { writeJobStatus(jobFilePath, 'failed'); } catch { /* best effort */ }
+    }
+  }
+
+  const finishedAt = new Date().toISOString();
+  const durationMs = Date.parse(finishedAt) - Date.parse(startedAt);
+  const durationStr = `${Math.floor(durationMs / 60000)}m ${Math.floor((durationMs % 60000) / 1000)}s`;
+  const status = exitCode === 0 ? 'completed' : 'failed';
+
+  fs.appendFileSync(logPath, `\n${'─'.repeat(60)}\nExit code: ${exitCode} | Duration: ${durationStr}${errorMsg ? ' | ERROR' : ''}\n${'═'.repeat(60)}\n`, 'utf8');
+
+  // Update schedule lastRun
+  updateScheduleLastRun(DISPATCH_ROOT, id, finishedAt, status, jobId);
+
+  // Record event
+  appendScheduleEvent(DISPATCH_ROOT, {
+    scheduleId: id, scheduleName: schedule.name, repo: schedule.repo,
+    type: status, startedAt, finishedAt, durationMs, exitCode,
+    ...(jobId ? { jobId } : {}),
+    ...(errorMsg ? { error: errorMsg.slice(0, 500) } : {}),
+  });
+
+  // Release lock
+  releaseScheduleLock(DISPATCH_ROOT, id);
+
+  // Auto-disable one-shot (non-recurring) schedules after execution
+  const updatedSched = findSchedule(DISPATCH_ROOT, id);
+  if (updatedSched && !updatedSched.recurring) {
+    toggleSchedule(DISPATCH_ROOT, id); // disables it
+    try { syncCrontab(DISPATCH_ROOT); } catch { /* best effort */ }
+  }
+
+  out({ id, status, exitCode, durationMs, startedAt, finishedAt, logPath, ...(jobId ? { jobId, jobFilePath } : {}) });
+}
+
 // ── Router ──────────────────────────────────────────────────
 
 const USAGE = `Usage: hub <command>
@@ -465,7 +854,28 @@ Checkpoint commands:
   checkpoint create <repo>        Create checkpoint of current state
   checkpoint revert <repo> <id>   Revert to checkpoint (destructive)
   checkpoint dismiss <repo> <id>  Delete checkpoint, keep current state
-  checkpoint list [--repo=name]   List checkpoints`;
+  checkpoint list [--repo=name]   List checkpoints
+
+Schedule commands:
+  schedule [list]                 List all schedules with next-run times
+  schedule show <id>              Show schedule details + recent events
+  schedule add --name=... --repo=... --cron=... --prompt=...
+                                  Create a prompt schedule (no job tracking)
+  schedule add --name=... --repo=... --cron=... --type=job --prompt=...
+                                  Create a dispatch job schedule (tracked in notes/jobs/)
+  schedule add --name=... --repo=... --cron=... --type=loop --loop-type=...
+                                  Create a loop schedule
+  schedule add --name=... --repo=... --cron=... --type=shell --command=...
+                                  Create a shell schedule
+  schedule edit <id> [--fields]   Edit schedule fields
+  schedule delete <id>            Delete a schedule
+  schedule enable <id>            Enable a schedule
+  schedule disable <id>           Disable a schedule
+  schedule run <id>               Manually trigger a schedule now
+  schedule sync                   Sync schedules.json → system crontab
+  schedule active                 Show currently running scheduled jobs
+  schedule events [--limit=N]     Show recent schedule events
+  schedule clear-events [<id>]    Clear events for a schedule (or all)`;
 
 // Route: handle subcommands for tasks and swarm
 function route() {
@@ -491,6 +901,20 @@ function route() {
   if (command === 'checkpoint' && subcommand === 'revert') return cmdCheckpointRevert();
   if (command === 'checkpoint' && subcommand === 'dismiss') return cmdCheckpointDismiss();
   if (command === 'checkpoint' && (subcommand === 'list' || !subcommand)) return cmdCheckpointList();
+
+  // schedule subcommands
+  if (command === 'schedule' && subcommand === 'show') return cmdScheduleShow();
+  if (command === 'schedule' && subcommand === 'add') return cmdScheduleAdd();
+  if (command === 'schedule' && subcommand === 'edit') return cmdScheduleEdit();
+  if (command === 'schedule' && subcommand === 'delete') return cmdScheduleDelete();
+  if (command === 'schedule' && subcommand === 'enable') return cmdScheduleEnable();
+  if (command === 'schedule' && subcommand === 'disable') return cmdScheduleDisable();
+  if (command === 'schedule' && subcommand === 'run') return cmdScheduleRun();
+  if (command === 'schedule' && subcommand === 'sync') return cmdScheduleSync();
+  if (command === 'schedule' && subcommand === 'active') return cmdScheduleActive();
+  if (command === 'schedule' && subcommand === 'events') return cmdScheduleEvents();
+  if (command === 'schedule' && subcommand === 'clear-events') return cmdScheduleClearEvents();
+  if (command === 'schedule' && (!subcommand || subcommand === 'list')) return cmdScheduleList();
 
   // Read commands
   const readCommands = {

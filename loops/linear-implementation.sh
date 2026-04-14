@@ -77,7 +77,7 @@ EOF
 exec > >(tee -a "$LOG_FILE") 2>&1
 
 # Write LOOP_STATUS on unexpected exit
-trap 'echo "LOOP_STATUS: failed"' ERR
+trap 'printf "\nLOOP_STATUS: failed\n"; echo failed > "$RUN_DIR/status.txt"' ERR
 
 # Snapshot the prompt used for this run
 cp "$PROMPT_FILE" "$RUN_DIR/prompt.md"
@@ -196,12 +196,15 @@ while true; do
     (( ++iteration ))
     continue
   fi
+  printf '%s\n' "$output" > "$RUN_DIR/phase_iter${iteration}.txt"
 
   # Exact-line match to avoid false positives
-  if echo "$output" | grep -qx "ALL PHASES COMPLETE"; then
+  final_line=$(printf '%s\n' "$output" | awk 'NF { line=$0 } END { print line }')
+  if [[ "$final_line" == "ALL PHASES COMPLETE" ]]; then
     echo ""
     echo "All phases complete. Loop done."
     echo "LOOP_STATUS: completed"
+    echo completed > "$RUN_DIR/status.txt"
     exit 0
   fi
 

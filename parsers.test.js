@@ -16,6 +16,8 @@ const {
   parseJobDir,
   parsePlansDir,
   parseSkillsDir,
+  parseLoopRun,
+  parseLoopRunDetailed,
   loadConfig,
   writeTaskDone,
   writeTaskDoneByText,
@@ -27,6 +29,27 @@ const {
   writeJobValidation,
   writeJobKill,
   writeJobStatus,
+  // Schedule
+  dateToCron,
+  parseCronField,
+  cronMatchesDate,
+  computeNextRun,
+  describeCron,
+  validateCron,
+  loadSchedules,
+  saveSchedules,
+  createSchedule,
+  updateSchedule,
+  deleteSchedule,
+  toggleSchedule,
+  findSchedule,
+  getAdjacentSchedules,
+  loadScheduleEvents,
+  appendScheduleEvent,
+  clearScheduleEvents,
+  acquireScheduleLock,
+  releaseScheduleLock,
+  getActiveLocks,
 } = require('./parsers');
 
 // ── Helpers ──────────────────────────────────────────────────
@@ -405,6 +428,120 @@ describe('parseJobDir', () => {
 
   it('returns empty array for missing directory', () => {
     assert.deepEqual(parseJobDir('/nonexistent/dir'), []);
+  });
+});
+
+// ── parseLoopRun ─────────────────────────────────────────────
+
+describe('parseLoopRun', () => {
+  beforeEach(setup);
+  afterEach(teardown);
+
+  function writeLoopLog(lines) {
+    const runDir = path.join(tmpDir, '.dispatch', 'loops', 'linear-review', '2026-04-13T16:42:09');
+    fs.mkdirSync(runDir, { recursive: true });
+    fs.writeFileSync(path.join(runDir, 'loop.log'), lines.join('\n'), 'utf8');
+    return runDir;
+  }
+
+  it('does not treat completion tokens in echoed prompt text as a completed loop', () => {
+    const runDir = writeLoopLog([
+      'LOOP_SESSION: session-123',
+      'LOOP_TYPE: linear-review',
+      'LOOP_AGENT: codex:gpt-5.4',
+      'LOOP_STARTED: 2026-04-13 16:42:09',
+      '---',
+      'Starting linear review loop.',
+      'Iteration 1 - 2026-04-13 16:42:09',
+      'If no issues remain, print exactly:',
+      '```',
+      'ALL PHASES COMPLETE',
+      '```',
+      'End your response with exactly one line: VERDICT: PASS or VERDICT: FAIL.',
+    ]);
+
+    const result = parseLoopRun(runDir);
+    assert.equal(result.iteration, 1);
+    assert.equal(result.complete, false);
+    assert.equal(result.lastVerdict, null);
+
+    const detailed = parseLoopRunDetailed(runDir);
+    assert.equal(detailed.iterations[0].verdict, null);
+  });
+
+  it('marks a loop complete from explicit loop completion output', () => {
+    const runDir = writeLoopLog([
+      'LOOP_SESSION: session-123',
+      'LOOP_TYPE: linear-review',
+      'LOOP_AGENT: codex:gpt-5.4',
+      'LOOP_STARTED: 2026-04-13 16:42:09',
+      '---',
+      'Iteration 1 - 2026-04-13 16:42:09',
+      'ALL PHASES COMPLETE',
+      '',
+      'All phases complete. Loop done.',
+      'LOOP_STATUS: completed',
+    ]);
+
+    const result = parseLoopRun(runDir);
+    assert.equal(result.complete, true);
+    assert.equal(result.lastVerdict, 'ALL PHASES COMPLETE');
+
+    const detailed = parseLoopRunDetailed(runDir);
+    assert.equal(detailed.iterations[0].verdict, 'PASS');
+  });
+
+  it('parses noisy completion markers from tmux-prefixed lines', () => {
+    const runDir = writeLoopLog([
+      'LOOP_SESSION: session-123',
+      'LOOP_TYPE: linear-review',
+      'LOOP_AGENT: codex:gpt-5.4',
+      'LOOP_STARTED: 2026-04-13 16:42:09',
+      '---',
+      'Iteration 1 - 2026-04-13 16:42:09',
+      'dispatch % All phases complete. Loop done.',
+      'dispatch % LOOP_STATUS: completed',
+    ]);
+
+    const result = parseLoopRun(runDir);
+    assert.equal(result.complete, true);
+    assert.equal(result.loopStatus, 'completed');
+
+    const detailed = parseLoopRunDetailed(runDir);
+    assert.equal(detailed.iterations[0].verdict, 'PASS');
+  });
+
+  it('parses phase artifacts for linear loops', () => {
+    const runDir = writeLoopLog([
+      'LOOP_SESSION: session-123',
+      'LOOP_TYPE: linear-review',
+      'LOOP_AGENT: codex:gpt-5.4',
+      'LOOP_STARTED: 2026-04-13 16:42:09',
+      '---',
+      'Iteration 1 - 2026-04-13 16:42:09',
+    ]);
+    fs.writeFileSync(path.join(runDir, 'phase_iter1.txt'), 'phase output', 'utf8');
+
+    const detailed = parseLoopRunDetailed(runDir);
+    assert.equal(detailed.artifacts.length, 1);
+    assert.equal(detailed.artifacts[0].type, 'phase');
+    assert.equal(detailed.artifacts[0].iteration, 1);
+  });
+
+  it('falls back to status.txt when LOOP_STATUS is missing from loop.log', () => {
+    const runDir = writeLoopLog([
+      'LOOP_SESSION: session-123',
+      'LOOP_TYPE: linear-review',
+      'LOOP_AGENT: codex:gpt-5.4',
+      'LOOP_STARTED: 2026-04-13 16:42:09',
+      '---',
+      'Iteration 1 - 2026-04-13 16:42:09',
+    ]);
+    fs.writeFileSync(path.join(runDir, 'status.txt'), 'completed\n', 'utf8');
+
+    const result = parseLoopRun(runDir);
+    assert.equal(result.loopStatus, 'completed');
+    assert.equal(result.complete, true);
   });
 });
 
@@ -1055,5 +1192,383 @@ describe('writeJobStatus', () => {
 
     writeJobStatus(f, 'failed');
     assert.ok(read(f).includes('Validation: Validated'));
+  });
+});
+
+// ── parseCronField ──────────────────────────────────────────
+
+describe('parseCronField', () => {
+  it('parses wildcard', () => {
+    const result = parseCronField('*', 0, 59);
+    assert.equal(result.size, 60);
+    assert.ok(result.has(0));
+    assert.ok(result.has(59));
+  });
+
+  it('parses specific value', () => {
+    const result = parseCronField('5', 0, 59);
+    assert.equal(result.size, 1);
+    assert.ok(result.has(5));
+  });
+
+  it('parses range', () => {
+    const result = parseCronField('1-5', 0, 59);
+    assert.equal(result.size, 5);
+    assert.ok(result.has(1));
+    assert.ok(result.has(5));
+    assert.ok(!result.has(0));
+  });
+
+  it('parses step values', () => {
+    const result = parseCronField('*/15', 0, 59);
+    assert.deepEqual([...result].sort((a, b) => a - b), [0, 15, 30, 45]);
+  });
+
+  it('parses range with step', () => {
+    const result = parseCronField('1-10/3', 0, 59);
+    assert.deepEqual([...result].sort((a, b) => a - b), [1, 4, 7, 10]);
+  });
+
+  it('parses comma-separated list', () => {
+    const result = parseCronField('1,3,5', 0, 59);
+    assert.deepEqual([...result].sort((a, b) => a - b), [1, 3, 5]);
+  });
+
+  it('ignores out-of-range values', () => {
+    const result = parseCronField('99', 0, 59);
+    assert.equal(result.size, 0);
+  });
+});
+
+// ── cronMatchesDate ─────────────────────────────────────────
+
+describe('cronMatchesDate', () => {
+  it('matches exact minute and hour', () => {
+    const d = new Date(2026, 3, 14, 9, 0); // April 14, 2026 9:00 AM (Tuesday)
+    assert.ok(cronMatchesDate('0 9 * * *', d));
+  });
+
+  it('does not match wrong minute', () => {
+    const d = new Date(2026, 3, 14, 9, 5);
+    assert.ok(!cronMatchesDate('0 9 * * *', d));
+  });
+
+  it('matches weekday range', () => {
+    const tue = new Date(2026, 3, 14, 9, 0); // Tuesday
+    const sat = new Date(2026, 3, 18, 9, 0); // Saturday
+    assert.ok(cronMatchesDate('0 9 * * 1-5', tue));
+    assert.ok(!cronMatchesDate('0 9 * * 1-5', sat));
+  });
+
+  it('handles Sunday as 0 and 7', () => {
+    const sun = new Date(2026, 3, 19, 10, 0); // Sunday
+    assert.ok(cronMatchesDate('0 10 * * 0', sun));
+    assert.ok(cronMatchesDate('0 10 * * 7', sun));
+  });
+
+  it('matches step pattern', () => {
+    const d30 = new Date(2026, 3, 14, 9, 30);
+    const d7 = new Date(2026, 3, 14, 9, 7);
+    assert.ok(cronMatchesDate('*/15 * * * *', d30));
+    assert.ok(!cronMatchesDate('*/15 * * * *', d7));
+  });
+
+  it('rejects invalid cron (wrong number of fields)', () => {
+    assert.ok(!cronMatchesDate('0 9 * *', new Date()));
+  });
+
+  it('matches specific day of month', () => {
+    const d = new Date(2026, 0, 15, 8, 0); // Jan 15
+    assert.ok(cronMatchesDate('0 8 15 * *', d));
+    assert.ok(!cronMatchesDate('0 8 16 * *', d));
+  });
+});
+
+// ── computeNextRun ──────────────────────────────────────────
+
+describe('computeNextRun', () => {
+  it('finds next run for daily schedule', () => {
+    const after = new Date(2026, 3, 14, 10, 0); // Tue 10:00 AM
+    const next = computeNextRun('0 9 * * *', after);
+    assert.ok(next);
+    assert.equal(next.getHours(), 9);
+    assert.equal(next.getMinutes(), 0);
+    assert.equal(next.getDate(), 15); // Next day
+  });
+
+  it('finds next weekday run skipping weekend', () => {
+    const friday = new Date(2026, 3, 17, 10, 0); // Friday 10:00 AM
+    const next = computeNextRun('0 9 * * 1-5', friday);
+    assert.ok(next);
+    assert.equal(next.getDay(), 1); // Monday
+    assert.equal(next.getDate(), 20);
+  });
+
+  it('returns null when no match in window', () => {
+    // Feb 30 never exists
+    const result = computeNextRun('0 0 30 2 *', new Date(2026, 0, 1), 400);
+    assert.equal(result, null);
+  });
+
+  it('starts from next minute, not current', () => {
+    const now = new Date(2026, 3, 14, 9, 0, 30); // 9:00:30
+    const next = computeNextRun('* * * * *', now);
+    assert.ok(next);
+    assert.equal(next.getMinutes(), 1);
+  });
+});
+
+// ── describeCron ────────────────────────────────────────────
+
+describe('describeCron', () => {
+  it('describes daily schedule', () => {
+    assert.equal(describeCron('0 9 * * *'), 'Daily at 9 AM');
+  });
+
+  it('describes weekday schedule', () => {
+    assert.equal(describeCron('0 9 * * 1-5'), 'Weekdays at 9 AM');
+  });
+
+  it('describes step pattern', () => {
+    assert.equal(describeCron('*/15 * * * *'), 'Every 15 minutes');
+  });
+
+  it('describes weekend schedule', () => {
+    assert.equal(describeCron('0 10 * * 0,6'), 'Weekends at 10 AM');
+  });
+
+  it('falls back to raw expression for complex patterns', () => {
+    const expr = '0 9 1,15 * *';
+    assert.equal(describeCron(expr), expr);
+  });
+});
+
+// ── validateCron ────────────────────────────────────────────
+
+describe('validateCron', () => {
+  it('returns null for valid expression', () => {
+    assert.equal(validateCron('0 9 * * 1-5'), null);
+    assert.equal(validateCron('*/15 * * * *'), null);
+    assert.equal(validateCron('0 0 1 1 *'), null);
+  });
+
+  it('rejects wrong number of fields', () => {
+    assert.ok(validateCron('0 9 * *'));
+    assert.ok(validateCron('0 9 * * * *'));
+  });
+
+  it('rejects empty input', () => {
+    assert.ok(validateCron(''));
+    assert.ok(validateCron(null));
+  });
+});
+
+// ── dateToCron ──────────────────────────────────────────────
+
+describe('dateToCron', () => {
+  it('converts a Date to a one-shot cron expression', () => {
+    const d = new Date(2026, 3, 13, 22, 30); // April 13, 2026 at 10:30 PM
+    assert.equal(dateToCron(d), '30 22 13 4 *');
+  });
+
+  it('handles midnight', () => {
+    const d = new Date(2026, 0, 1, 0, 0); // Jan 1, 2026 at midnight
+    assert.equal(dateToCron(d), '0 0 1 1 *');
+  });
+});
+
+// ── Schedule CRUD (recurring field) ─────────────────────────
+
+describe('Schedule recurring field', () => {
+  beforeEach(setup);
+  afterEach(teardown);
+
+  it('defaults recurring to false', () => {
+    const sched = createSchedule(tmpDir, {
+      name: 'One-shot', repo: 'app', cron: '30 22 13 4 *', prompt: 'Do it once',
+    });
+    assert.equal(sched.recurring, false);
+  });
+
+  it('respects recurring: true', () => {
+    const sched = createSchedule(tmpDir, {
+      name: 'Recurring', repo: 'app', cron: '0 9 * * 1-5', prompt: 'Do it daily',
+      recurring: true,
+    });
+    assert.equal(sched.recurring, true);
+  });
+});
+
+// ── Schedule CRUD ───────────────────────────────────────────
+
+describe('Schedule CRUD', () => {
+  beforeEach(setup);
+  afterEach(teardown);
+
+  it('creates and loads a schedule', () => {
+    const sched = createSchedule(tmpDir, {
+      name: 'Test', repo: 'app', cron: '0 9 * * *', prompt: 'Do stuff',
+    });
+    assert.ok(sched.id.startsWith('sched-'));
+    assert.equal(sched.name, 'Test');
+    assert.equal(sched.type, 'prompt');
+    assert.equal(sched.enabled, true);
+    assert.ok(sched.nextRun);
+
+    const loaded = loadSchedules(tmpDir);
+    assert.equal(loaded.length, 1);
+    assert.equal(loaded[0].id, sched.id);
+    assert.ok(loaded[0].nextRun); // computed on load
+  });
+
+  it('updates a schedule', () => {
+    const sched = createSchedule(tmpDir, {
+      name: 'Old name', repo: 'app', cron: '0 9 * * *', prompt: 'Do stuff',
+    });
+    const updated = updateSchedule(tmpDir, sched.id, { name: 'New name' });
+    assert.equal(updated.name, 'New name');
+    assert.equal(updated.cron, '0 9 * * *'); // unchanged
+  });
+
+  it('deletes a schedule', () => {
+    const sched = createSchedule(tmpDir, {
+      name: 'Delete me', repo: 'app', cron: '0 9 * * *', prompt: 'test',
+    });
+    assert.equal(deleteSchedule(tmpDir, sched.id), true);
+    assert.equal(loadSchedules(tmpDir).length, 0);
+    assert.equal(deleteSchedule(tmpDir, 'nonexistent'), false);
+  });
+
+  it('toggles a schedule', () => {
+    const sched = createSchedule(tmpDir, {
+      name: 'Toggle me', repo: 'app', cron: '0 9 * * *', prompt: 'test',
+    });
+    assert.equal(sched.enabled, true);
+    const toggled = toggleSchedule(tmpDir, sched.id);
+    assert.equal(toggled.enabled, false);
+    assert.equal(toggled.nextRun, null); // disabled → no nextRun
+    const toggled2 = toggleSchedule(tmpDir, sched.id);
+    assert.equal(toggled2.enabled, true);
+    assert.ok(toggled2.nextRun);
+  });
+
+  it('creates loop-type schedule', () => {
+    const sched = createSchedule(tmpDir, {
+      name: 'Loop', repo: 'app', cron: '0 2 * * *', type: 'loop',
+      loopType: 'linear-implementation', agentSpec: 'claude:claude-opus-4-6',
+    });
+    assert.equal(sched.type, 'loop');
+    assert.equal(sched.loopType, 'linear-implementation');
+    assert.equal(sched.agentSpec, 'claude:claude-opus-4-6');
+  });
+
+  it('finds adjacent schedules', () => {
+    const s1 = createSchedule(tmpDir, {
+      name: 'A', repo: 'app', cron: '0 9 * * *', prompt: 'a',
+    });
+    const s2 = createSchedule(tmpDir, {
+      name: 'B', repo: 'app', cron: '0 10 * * *', prompt: 'b',
+    });
+    // C runs at midnight — not adjacent to 9am
+    createSchedule(tmpDir, {
+      name: 'C', repo: 'app', cron: '0 0 * * *', prompt: 'c',
+    });
+    const adjacent = getAdjacentSchedules(tmpDir, s1.id, 2);
+    assert.equal(adjacent.length, 1);
+    assert.equal(adjacent[0].id, s2.id);
+  });
+
+  it('returns empty when no schedules file exists', () => {
+    assert.deepEqual(loadSchedules(tmpDir), []);
+  });
+});
+
+// ── Schedule events ─────────────────────────────────────────
+
+describe('Schedule events', () => {
+  beforeEach(setup);
+  afterEach(teardown);
+
+  it('appends and loads events', () => {
+    appendScheduleEvent(tmpDir, {
+      scheduleId: 's1', scheduleName: 'Test', type: 'completed',
+      startedAt: '2026-04-13T09:00:00', finishedAt: '2026-04-13T09:05:00',
+    });
+    appendScheduleEvent(tmpDir, {
+      scheduleId: 's2', scheduleName: 'Other', type: 'failed',
+      startedAt: '2026-04-13T10:00:00', finishedAt: '2026-04-13T10:01:00',
+    });
+
+    const all = loadScheduleEvents(tmpDir);
+    assert.equal(all.length, 2);
+
+    const s1Only = loadScheduleEvents(tmpDir, { scheduleId: 's1' });
+    assert.equal(s1Only.length, 1);
+    assert.equal(s1Only[0].type, 'completed');
+
+    const failedOnly = loadScheduleEvents(tmpDir, { type: 'failed' });
+    assert.equal(failedOnly.length, 1);
+  });
+
+  it('clears events for a specific schedule', () => {
+    appendScheduleEvent(tmpDir, { scheduleId: 's1', type: 'completed', startedAt: '2026-04-13T09:00:00' });
+    appendScheduleEvent(tmpDir, { scheduleId: 's2', type: 'completed', startedAt: '2026-04-13T10:00:00' });
+    clearScheduleEvents(tmpDir, 's1');
+    const remaining = loadScheduleEvents(tmpDir);
+    assert.equal(remaining.length, 1);
+    assert.equal(remaining[0].scheduleId, 's2');
+  });
+
+  it('clears all events', () => {
+    appendScheduleEvent(tmpDir, { scheduleId: 's1', type: 'completed', startedAt: '2026-04-13T09:00:00' });
+    appendScheduleEvent(tmpDir, { scheduleId: 's2', type: 'failed', startedAt: '2026-04-13T10:00:00' });
+    clearScheduleEvents(tmpDir);
+    assert.equal(loadScheduleEvents(tmpDir).length, 0);
+  });
+
+  it('respects limit', () => {
+    for (let i = 0; i < 5; i++) {
+      appendScheduleEvent(tmpDir, { scheduleId: 's1', type: 'completed', startedAt: `2026-04-${13 + i}T09:00:00` });
+    }
+    const limited = loadScheduleEvents(tmpDir, { limit: 3 });
+    assert.equal(limited.length, 3);
+  });
+});
+
+// ── Schedule locks ──────────────────────────────────────────
+
+describe('Schedule locks', () => {
+  beforeEach(setup);
+  afterEach(teardown);
+
+  it('acquires and releases lock', () => {
+    const lock = acquireScheduleLock(tmpDir, 'sched-1', 'job-1');
+    assert.ok(lock);
+    assert.equal(lock.scheduleId, 'sched-1');
+    assert.equal(lock.pid, process.pid);
+
+    const locks = getActiveLocks(tmpDir);
+    assert.equal(locks.length, 1);
+
+    releaseScheduleLock(tmpDir, 'sched-1');
+    assert.equal(getActiveLocks(tmpDir).length, 0);
+  });
+
+  it('returns null when lock already held by this process', () => {
+    acquireScheduleLock(tmpDir, 'sched-1', 'job-1');
+    const second = acquireScheduleLock(tmpDir, 'sched-1', 'job-2');
+    assert.equal(second, null); // lock already held
+    releaseScheduleLock(tmpDir, 'sched-1');
+  });
+
+  it('cleans up stale locks (dead PID)', () => {
+    const dir = path.join(tmpDir, '.dispatch', 'runtime', 'schedule-locks');
+    fs.mkdirSync(dir, { recursive: true });
+    // Write a lock with a PID that definitely doesn't exist
+    fs.writeFileSync(path.join(dir, 'sched-stale.lock'), JSON.stringify({
+      pid: 999999999, startedAt: '2026-04-13T00:00:00', scheduleId: 'sched-stale',
+    }), 'utf8');
+    const locks = getActiveLocks(tmpDir);
+    assert.equal(locks.length, 0); // stale lock ignored
   });
 });

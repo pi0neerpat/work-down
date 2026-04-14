@@ -22,7 +22,14 @@ export function usePolling(url, intervalMs) {
     controllerRef.current = controller
 
     try {
-      const res = await fetch(url, { signal: controller.signal })
+      const res = await fetch(url, {
+        signal: controller.signal,
+        cache: 'no-store',
+        headers: {
+          'Cache-Control': 'no-cache',
+          Pragma: 'no-cache',
+        },
+      })
       if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
       const json = await res.json()
       if (isMountedRef.current) {

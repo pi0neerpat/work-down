@@ -291,6 +291,7 @@ function ArtifactCard({ artifact }) {
                 artifact.type === 'review' && 'text-blue-400 bg-blue-400/10',
                 artifact.type === 'synthesis' && 'text-purple-400 bg-purple-400/10',
                 artifact.type === 'verification' && 'text-amber-400 bg-amber-400/10',
+                artifact.type === 'phase' && 'text-emerald-400 bg-emerald-400/10',
                 artifact.type === 'unknown' && 'text-muted-foreground bg-card',
               )}>
                 {artifact.type}

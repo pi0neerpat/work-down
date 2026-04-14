@@ -169,10 +169,13 @@ export default function JobsView({
   const [selectedRepos, setSelectedRepos] = useState(() => savedFilters?.repos ?? new Set(repoNames))
   const [bugFilter, setBugFilter] = useState(() => savedFilters?.bugOnly ?? false)
 
-  // Sync repo filter when repos change (only if empty)
+  // Sync repo filter when repos change — add any newly discovered repos
   useMemo(() => {
-    if (repoNames.length > 0 && selectedRepos.size === 0) {
-      setSelectedRepos(new Set(repoNames))
+    if (repoNames.length > 0) {
+      const newRepos = repoNames.filter(r => !selectedRepos.has(r))
+      if (newRepos.length > 0 && savedFilters === null) {
+        setSelectedRepos(new Set([...selectedRepos, ...newRepos]))
+      }
     }
   }, [repoNames.join(',')]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -215,8 +218,8 @@ export default function JobsView({
 
   const filteredItems = useMemo(() => {
     return allItems.filter(w => {
-      if (selectedStatuses.size > 0 && !selectedStatuses.has(w.filterStatus)) return false
-      if (selectedRepos.size > 0 && !selectedRepos.has(w.repo)) return false
+      if (!selectedStatuses.has(w.filterStatus)) return false
+      if (!selectedRepos.has(w.repo)) return false
       if (bugFilter && !w.isBug) return false
       return true
     })

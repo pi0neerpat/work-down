@@ -1,26 +1,21 @@
 [
   {
-    "id": "sched-1774050088452",
-    "name": "E2E Schedule Test",
-    "repo": "marketing",
-    "cron": "*/30 * * * *",
-    "prompt": "Run an E2E verification ping task",
-    "model": "claude-opus-4-6",
-    "enabled": true,
-    "created": "2026-03-20T23:41:28.452Z",
-    "lastRun": null,
-    "nextRun": null
-  },
-  {
-    "id": "sched-1774658382692",
-    "name": "Test Cron Job",
+    "id": "sched-1776134986340",
+    "name": "linear-review loop",
+    "type": "loop",
     "repo": "dispatch",
-    "cron": "0 9 * * *",
-    "prompt": "Check status and report",
+    "cron": "51 21 13 4 *",
+    "prompt": null,
     "model": "claude-opus-4-6",
+    "loopType": "linear-review",
+    "agentSpec": "claude:claude-opus-4-6",
+    "command": null,
+    "recurring": false,
     "enabled": true,
-    "created": "2026-03-28T00:39:42.692Z",
+    "concurrency": "skip",
+    "created": "2026-04-14T02:49:46.340Z",
     "lastRun": null,
-    "nextRun": null
+    "lastRunStatus": null,
+    "lastRunJobId": null
   }
 ]

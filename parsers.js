@@ -1920,7 +1920,7 @@ function clearScheduleEvents(dispatchRoot, scheduleId) {
   const fp = eventsFilePath(dispatchRoot);
   if (!fs.existsSync(fp)) return;
   if (!scheduleId) {
-    fs.writeFileSync(fp, '[]', 'utf8');
+    fs.writeFileSync(fp, '[]\n', 'utf8');
     return;
   }
   let events = [];

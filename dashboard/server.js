@@ -288,8 +288,8 @@ function isValidAgentSpec(value) {
   return typeof value === 'string' && VALID_AGENT_SPEC_RE.test(value)
 }
 
-// Branch names: alphanumeric, dots, hyphens, forward slashes
-const VALID_BRANCH_RE = /^[a-zA-Z0-9._\-/]+$/
+// Branch names: alphanumeric, dots, hyphens, forward slashes (max 200 chars)
+const VALID_BRANCH_RE = /^[a-zA-Z0-9._\-/]{1,200}$/
 function isValidBranchName(name) {
   return typeof name === 'string' && VALID_BRANCH_RE.test(name) && !name.includes('..')
 }
@@ -1308,18 +1308,17 @@ app.get(['/api/jobs/:id/diff', '/api/swarm/:id/diff'], (req, res) => {
   }
 
   const repoPath = found.repo.resolvedPath
-  const validBranchRe = /^[a-zA-Z0-9._\-/]+$/
   const validShaRe = /^[0-9a-f]{7,40}$/
 
   // Worktree jobs: diff branch vs base (existing behavior)
   // Non-worktree jobs: diff startCommit..HEAD to show only this job's changes
   if (detail.branch) {
     const base = req.query.base || 'main'
-    if (!validBranchRe.test(base)) {
-      return res.status(400).json({ error: `Invalid base branch: ${base}` })
+    if (!isValidBranchName(base)) {
+      return res.status(400).json({ error: `Invalid base branch: ${String(base).slice(0, 80)}` })
     }
-    if (!validBranchRe.test(detail.branch)) {
-      return res.status(400).json({ error: `Invalid job branch: ${detail.branch}` })
+    if (!isValidBranchName(detail.branch)) {
+      return res.status(400).json({ error: `Invalid job branch: ${String(detail.branch).slice(0, 80)}` })
     }
 
     try {
@@ -1696,9 +1695,8 @@ app.post(['/api/jobs/init', '/api/swarm/init'], (req, res) => {
     return res.status(400).json({ error: `Invalid plan slug: ${String(planSlug).slice(0, 80)}` })
   }
   // Validate baseBranch if provided — reject shell metacharacters and path traversal
-  const validBranchRe = /^[a-zA-Z0-9._\-/]+$/
-  if (baseBranch && !validBranchRe.test(baseBranch)) {
-    return res.status(400).json({ error: `Invalid base branch name: ${baseBranch}` })
+  if (baseBranch && !isValidBranchName(baseBranch)) {
+    return res.status(400).json({ error: `Invalid base branch name: ${String(baseBranch).slice(0, 80)}` })
   }
   if (previousJobId && !isValidJobId(previousJobId)) {
     return res.status(400).json({ error: `Invalid previous job id: ${previousJobId}` })
@@ -2542,12 +2540,11 @@ app.post(['/api/jobs/:id/merge', '/api/swarm/:id/merge'], (req, res) => {
     const base = targetBranch || detail.baseBranch || 'main'
 
     // Validate branch names — reject anything with shell metacharacters or path traversal
-    const validBranchRe = /^[a-zA-Z0-9._\-/]+$/
-    if (!validBranchRe.test(base)) {
-      return res.status(400).json({ error: `Invalid target branch name: ${base}` })
+    if (!isValidBranchName(base)) {
+      return res.status(400).json({ error: `Invalid target branch name: ${String(base).slice(0, 80)}` })
     }
-    if (!validBranchRe.test(jobBranch)) {
-      return res.status(400).json({ error: `Invalid job branch name: ${jobBranch}` })
+    if (!isValidBranchName(jobBranch)) {
+      return res.status(400).json({ error: `Invalid job branch name: ${String(jobBranch).slice(0, 80)}` })
     }
 
     if (jobBranch === base) {
